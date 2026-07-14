@@ -78,6 +78,7 @@ const TABLES = [
   'customers',
   'credit_entries',
   'expenses',
+  'cash_ups',
 ];
 
 async function run() {

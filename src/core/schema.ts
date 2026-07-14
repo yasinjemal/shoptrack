@@ -26,7 +26,7 @@ export interface MigrationDb {
  * Bump this whenever the table shape changes. While ALLOW_DESTRUCTIVE_RESET is
  * on, bumping it is all you need to do -- the app rebuilds itself on next boot.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /**
  * ⚠️  PRE-RELEASE ONLY. THIS ERASES THE DATABASE.
@@ -151,6 +151,35 @@ const CREATE_EXPENSES = `
   );
 `;
 
+/**
+ * End-of-day till counts. The shop's cash-up.
+ *
+ * expected_amount and difference are SNAPSHOTS, stored rather than recomputed.
+ *
+ * This looks like denormalisation and is deliberate. Everything feeding the
+ * expected figure keeps moving: a backdated expense, a late stock-in, a
+ * corrected count all change what "expected" would be if recalculated next
+ * week. The owner counted their till against a number the app showed them at
+ * that moment, and that is the number the record has to preserve. Recomputing
+ * would silently rewrite history and turn a balanced cash-up into a shortfall
+ * nobody can explain.
+ *
+ * Contrast credit_entries, where balances are summed and never stored: there
+ * the ledger IS the truth. Here the reconciliation is an event that happened.
+ */
+const CREATE_CASH_UPS = `
+  CREATE TABLE IF NOT EXISTS cash_ups (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    counted_amount   REAL NOT NULL CHECK (counted_amount >= 0),
+    expected_amount  REAL NOT NULL,
+    difference       REAL NOT NULL,
+    taken_out        REAL NOT NULL DEFAULT 0 CHECK (taken_out >= 0),
+    is_opening       INTEGER NOT NULL DEFAULT 0,
+    notes            TEXT,
+    recorded_at      INTEGER NOT NULL
+  );
+`;
+
 const CREATE_INDEXES = `
   CREATE INDEX IF NOT EXISTS idx_products_active ON products(is_active);
   CREATE INDEX IF NOT EXISTS idx_movements_product ON stock_movements(product_id);
@@ -162,11 +191,13 @@ const CREATE_INDEXES = `
   CREATE INDEX IF NOT EXISTS idx_credit_date ON credit_entries(recorded_at);
   CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(recorded_at);
   CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category);
+  CREATE INDEX IF NOT EXISTS idx_cash_ups_date ON cash_ups(recorded_at);
 `;
 
 
 // Children before parents, so foreign keys never block the drop.
 const DROP_ALL = `
+  DROP TABLE IF EXISTS cash_ups;
   DROP TABLE IF EXISTS expenses;
   DROP TABLE IF EXISTS credit_entries;
   DROP TABLE IF EXISTS customers;
@@ -213,6 +244,7 @@ export async function initDatabase(db: MigrationDb) {
   await db.execAsync(CREATE_CUSTOMERS);
   await db.execAsync(CREATE_CREDIT_ENTRIES);
   await db.execAsync(CREATE_EXPENSES);
+  await db.execAsync(CREATE_CASH_UPS);
   await db.execAsync(CREATE_INDEXES);
   await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
 }

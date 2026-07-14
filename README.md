@@ -26,18 +26,25 @@ deliberately unsafe right now.
 
 ## What it answers
 
-Three different questions, kept separate on purpose.
+Four different questions, kept separate on purpose.
 
 | Question | Where the answer comes from |
 |---|---|
 | **Did the stock make money?** | `src/core/calculations.ts` — revenue minus what the goods cost |
 | **What do I actually keep?** | `src/core/expenses.ts` — the above, minus rent, transport, wages |
-| **Where is the money?** | `src/core/credit.ts` — what customers still owe |
+| **What am I still owed?** | `src/core/credit.ts` — the book: who owes what |
+| **Is the money actually here?** | `src/core/cashup.ts` — count the till, explain the gap |
 
 They are shown side by side and never quietly folded into one number. An owner
 whose shelf sold R2,400 but who paid R500 rent and is owed R560 on the book has
-not made R2,400 — and has not made R1,340 either. All three numbers are true,
-and they mean different things.
+not made R2,400 — and has not made R1,340 either. Every number is true, and they
+mean different things.
+
+That last question is the one that catches things. A shop can be profitable and
+still bleed cash: stock walks, change is given wrong, an expense is paid and
+never written down. None of it shows up in profit — the stock left the shelf
+either way, so the profit engine books the sale regardless. Only counting the
+cash finds it.
 
 ### Features
 
@@ -45,6 +52,7 @@ and they mean different things.
 - **Add stock** — record a delivery, with the price you actually paid
 - **Credit book (izikweletu)** — who owes what, who paid, who has gone quiet
 - **Expenses** — rent, electricity, transport, wages, airtime
+- **Cash up** — count the till, see the whole money trail, find what's missing
 - **This week** — gross profit, costs, what you kept, top product
 - **Recent activity** — what moved, and what's losing money
 - **Backup & restore** — a file you can keep in WhatsApp
@@ -65,12 +73,13 @@ npm run android    # or: npm run ios / npm run web
 Pure logic runs in plain node — no simulator, no device, about a second.
 
 ```bash
-npm test              # everything (85+ assertions)
+npm test              # everything (190+ assertions)
 npm run typecheck
 
 npm run test:calc     # the profit engine
 npm run test:credit   # the credit book
 npm run test:expenses # expenses and net profit
+npm run test:cashup   # the till reconciliation
 npm run test:schema   # schema creation, reset, and drift
 npm run test:db       # the adapter's real SQL against real SQLite
 ```
@@ -90,6 +99,7 @@ src/core/            Pure logic — no SQLite, no React, runs in node
   calculations.ts      sold / revenue / gross profit / confidence
   credit.ts            balances, outstanding, stale debts
   expenses.ts          category totals, net profit
+  cashup.ts            expected cash, reconciliation
   schema.ts            table definitions — source of truth
   db.ts                the only file that knows about SQL
 src/ui/              Screens and styles, one folder per feature
@@ -114,15 +124,20 @@ they drift apart.
 
 ## Design decisions worth knowing
 
-Three things look like bugs and are not. Each has a test holding it in place;
+Several things look like bugs and are not. Each has a test holding it in place;
 [docs/BEFORE-PILOT.md](docs/BEFORE-PILOT.md) explains them in full.
 
 - **Profit and credit are never subtracted.** The count model already booked the
   credit sale when the goods left the shelf. Subtracting the debt counts it twice.
-- **Stock purchases are not expenses.** They are already the cost side of gross
-  profit. There is deliberately no `STOCK` category, and the database rejects one.
+- **Stock purchases are not expenses — but they *are* cash-out.** `expenses.ts`
+  refuses them (they're already the cost side of profit; counting them twice
+  fakes a loss). `cashup.ts` counts them (handing cash to a supplier empties the
+  till). Profit and cash disagree about what stock is, and both are right.
 - **Balances are summed, never stored.** A stored balance that disagrees with its
   ledger cannot be untangled later. The ledger is append-only.
+- **A cash-up's expected figure *is* stored.** The opposite of the rule above,
+  on purpose: a balance is a live claim, a cash-up is an event that happened.
+  Recomputing it later would rewrite history.
 
 ---
 

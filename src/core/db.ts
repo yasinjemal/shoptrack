@@ -13,6 +13,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 import type { Product as CoreProduct, StockMovement } from './calculations';
 import type { CreditEntry, Customer } from './credit';
 import type { Expense, ExpenseCategory } from './expenses';
+import type { CashUpResult } from './cashup';
 
 /**
  * The product shape the UI works with.
@@ -331,4 +332,126 @@ export async function recordExpense(
  */
 export async function deleteExpense(db: SQLiteDatabase, expenseId: number): Promise<void> {
   await db.runAsync('DELETE FROM expenses WHERE id = ?', [expenseId]);
+}
+
+// ============================================
+// CASH-UP
+// ============================================
+
+export interface CashUp {
+  id: number;
+  counted_amount: number;
+  expected_amount: number;
+  difference: number;
+  taken_out: number;
+  /** True for the very first cash-up, which sets a baseline instead of reconciling. */
+  is_opening: boolean;
+  notes?: string;
+  recorded_at: number;
+}
+
+interface CashUpRow {
+  id: number;
+  counted_amount: number;
+  expected_amount: number;
+  difference: number;
+  taken_out: number;
+  is_opening: number;
+  notes: string | null;
+  recorded_at: number;
+}
+
+function toCashUp(r: CashUpRow): CashUp {
+  return {
+    id: r.id,
+    counted_amount: r.counted_amount,
+    expected_amount: r.expected_amount,
+    difference: r.difference,
+    taken_out: r.taken_out,
+    is_opening: r.is_opening === 1,
+    notes: r.notes ?? undefined,
+    recorded_at: r.recorded_at,
+  };
+}
+
+export async function loadCashUps(db: SQLiteDatabase, limit = 30): Promise<CashUp[]> {
+  const rows = await db.getAllAsync<CashUpRow>(
+    `SELECT id, counted_amount, expected_amount, difference, taken_out, is_opening, notes, recorded_at
+     FROM cash_ups ORDER BY recorded_at DESC LIMIT ?`,
+    [limit]
+  );
+  return rows.map(toCashUp);
+}
+
+/**
+ * The cash-up that sets the baseline for the next one.
+ *
+ * Ordered by recorded_at, then id: two cash-ups in the same millisecond is
+ * absurd in real use but trivial in tests, and an ambiguous "last" would make
+ * the opening balance nondeterministic.
+ */
+export async function getLastCashUp(db: SQLiteDatabase): Promise<CashUp | null> {
+  const row = await db.getFirstAsync<CashUpRow>(
+    `SELECT id, counted_amount, expected_amount, difference, taken_out, is_opening, notes, recorded_at
+     FROM cash_ups ORDER BY recorded_at DESC, id DESC LIMIT 1`
+  );
+  return row ? toCashUp(row) : null;
+}
+
+/**
+ * Record a cash-up.
+ *
+ * expected and difference are written as given, not recalculated later. The
+ * owner reconciled against the number they were shown; see the note on
+ * cash_ups in schema.ts.
+ */
+export async function recordCashUp(
+  db: SQLiteDatabase,
+  result: Pick<CashUpResult, 'counted' | 'expected' | 'difference'>,
+  options: { takenOut?: number; isOpening?: boolean; notes?: string | null } = {},
+  now: number = Date.now()
+): Promise<number> {
+  const insert = await db.runAsync(
+    `INSERT INTO cash_ups (counted_amount, expected_amount, difference, taken_out, is_opening, notes, recorded_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      result.counted,
+      result.expected,
+      result.difference,
+      options.takenOut ?? 0,
+      options.isOpening ? 1 : 0,
+      options.notes?.trim() || null,
+      now,
+    ]
+  );
+  return insert.lastInsertRowId;
+}
+
+/**
+ * Cash left in the till after a cash-up, which is where the next one starts.
+ * Returns null when there is no baseline yet.
+ */
+export function openingBalanceFrom(last: CashUp | null): number | null {
+  if (last == null) return null;
+  return Math.round((last.counted_amount - last.taken_out) * 100) / 100;
+}
+
+/**
+ * Total paid to suppliers in a window -- cash out of the till.
+ *
+ * Read straight from total_cost rather than via the profit engine: this is what
+ * the owner actually handed over, including any part of a delivery not yet
+ * priced per unit.
+ */
+export async function stockPurchaseTotal(
+  db: SQLiteDatabase,
+  start: number,
+  end: number
+): Promise<number> {
+  const row = await db.getFirstAsync<{ total: number | null }>(
+    `SELECT SUM(total_cost) as total FROM stock_movements
+     WHERE type = 'STOCK_IN' AND recorded_at >= ? AND recorded_at <= ?`,
+    [start, end]
+  );
+  return row?.total ?? 0;
 }

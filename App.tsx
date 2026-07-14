@@ -43,6 +43,7 @@ import {
   summariseOutstanding,
   type CreditSummary,
 } from './src/core/credit';
+import { CASH_TOLERANCE } from './src/core/cashup';
 import {
   calculateExpenseSummary,
   calculateNetProfit,
@@ -50,10 +51,17 @@ import {
   type ExpenseSummary,
   type NetProfit,
 } from './src/core/expenses';
-import { loadCreditEntries, loadCustomers, loadExpenses } from './src/core/db';
+import {
+  getLastCashUp,
+  loadCreditEntries,
+  loadCustomers,
+  loadExpenses,
+  type CashUp,
+} from './src/core/db';
 import { styles } from './src/ui/styles';
 import { CreditScreen } from './src/ui/credit/CreditScreen';
 import { ExpensesScreen } from './src/ui/expenses/ExpensesScreen';
+import { CashUpScreen } from './src/ui/cashup/CashUpScreen';
 
 // ============================================
 // DATABASE SETUP
@@ -69,7 +77,7 @@ let db: SQLite.SQLiteDatabase;
 // screens cannot drift apart again.
 type Product = AppProduct;
 
-type Screen = 'home' | 'products' | 'add_product' | 'edit_product' | 'count' | 'stock_in' | 'activity' | 'weekly' | 'credit' | 'expenses';
+type Screen = 'home' | 'products' | 'add_product' | 'edit_product' | 'count' | 'stock_in' | 'activity' | 'weekly' | 'credit' | 'expenses' | 'cashup';
 
 type Language = 'en' | 'zu';
 
@@ -217,6 +225,38 @@ const STRINGS = {
     NET_LOSS: "You are short:",
     NET_NO_EXPENSES: "No expenses recorded, so this is before rent and costs.",
 
+    // Cash up
+    CASHUP_TITLE: "Cash Up",
+    CASHUP_HOME_BUTTON: "Cash Up",
+    CASHUP_HOME_HINT: "Count your till",
+    CASHUP_FIRST_TITLE: "Starting Cash",
+    CASHUP_FIRST_HINT: "This is your starting point. Next time you cash up, we'll compare against this.",
+    CASHUP_QUESTION: "How much cash is in your till?",
+    CASHUP_HINT: "Count it before you look at anything else.",
+    CASHUP_SINCE: (when: string) => `Since your last cash up: ${when}`,
+    CASHUP_CHECK: "Check",
+    CASHUP_CHECKING: "Saving...",
+    CASHUP_SAVE: "Save",
+    CASHUP_TRAIL_TITLE: "How we worked it out",
+    CASHUP_LINE_OPENING: "Was in the till",
+    CASHUP_LINE_REVENUE: "Sold",
+    CASHUP_LINE_CREDIT: "Given on credit",
+    CASHUP_LINE_PAYMENTS: "Debts paid to you",
+    CASHUP_LINE_EXPENSES: "Expenses paid",
+    CASHUP_LINE_STOCK: "Stock bought",
+    CASHUP_EXPECTED: "Should be there",
+    CASHUP_COUNTED: "You counted",
+    CASHUP_BALANCED: "Your till is right",
+    CASHUP_SHORT: "Money is missing",
+    CASHUP_OVER: "There is extra",
+    CASHUP_TAKE_OUT: "Taking money out?",
+    CASHUP_TAKE_OUT_HINT: "If you're taking cash out now, put it here so tomorrow's count starts right.",
+    CASHUP_NO_COUNT_WARNING: "You haven't counted stock since your last cash up, so the 'sold' number is a guess. Count your stock first for a real answer.",
+    CASHUP_DONE: "Done",
+    CASHUP_HISTORY: "Last few cash ups",
+    CASHUP_CANCEL: "Cancel",
+    CASHUP_HOME_SHORTFALL: "was missing at your last cash up. Tap to look again.",
+
     // Language
     LANGUAGE_LABEL: "Language",
   },
@@ -358,6 +398,38 @@ const STRINGS = {
     NET_LOSS: "Okushodayo:",
     NET_NO_EXPENSES: "Azikho izindleko ezifakiwe, ngakho lokhu kungaphambi kwerenti nezinye izindleko.",
 
+    // Cash up
+    CASHUP_TITLE: "Bala Imali",
+    CASHUP_HOME_BUTTON: "Bala Imali",
+    CASHUP_HOME_HINT: "Bala imali yakho",
+    CASHUP_FIRST_TITLE: "Imali Yokuqala",
+    CASHUP_FIRST_HINT: "Lena yindawo yakho yokuqala. Ngokuzayo uma ubala imali, sizoqhathanisa nalokhu.",
+    CASHUP_QUESTION: "Imalini esesikhwameni sakho?",
+    CASHUP_HINT: "Yibale ngaphambi kokubheka noma yini enye.",
+    CASHUP_SINCE: (when: string) => `Kusukela ekubaleni kwakho kokugcina: ${when}`,
+    CASHUP_CHECK: "Hlola",
+    CASHUP_CHECKING: "Iyagcina...",
+    CASHUP_SAVE: "Gcina",
+    CASHUP_TRAIL_TITLE: "Sikubale kanjani",
+    CASHUP_LINE_OPENING: "Bekusesikhwameni",
+    CASHUP_LINE_REVENUE: "Okuthengisiwe",
+    CASHUP_LINE_CREDIT: "Okunikezwe ngesikweletu",
+    CASHUP_LINE_PAYMENTS: "Izikweletu ozikhokhelwe",
+    CASHUP_LINE_EXPENSES: "Izindleko ozikhokhile",
+    CASHUP_LINE_STOCK: "Isitoko osithengile",
+    CASHUP_EXPECTED: "Okufanele kube khona",
+    CASHUP_COUNTED: "Obalile",
+    CASHUP_BALANCED: "Imali yakho ilungile",
+    CASHUP_SHORT: "Kukhona imali engekho",
+    CASHUP_OVER: "Kukhona eyeqile",
+    CASHUP_TAKE_OUT: "Ukhipha imali?",
+    CASHUP_TAKE_OUT_HINT: "Uma ukhipha imali manje, yifake lapha ukuze ukubala kwakusasa kuqale kahle.",
+    CASHUP_NO_COUNT_WARNING: "Awukabali isitoko kusukela ekubaleni kwakho kwemali kokugcina, ngakho inani 'lokuthengisiwe' liyisilinganiso. Bala isitoko sakho kuqala ukuze uthole impendulo eyiqiniso.",
+    CASHUP_DONE: "Kwenziwe",
+    CASHUP_HISTORY: "Ukubala kwemali kwakamuva",
+    CASHUP_CANCEL: "Khansela",
+    CASHUP_HOME_SHORTFALL: "bekungekho ekubaleni kwakho kokugcina. Thepha ukuze ubheke futhi.",
+
     // Language
     LANGUAGE_LABEL: "Ulimi",
   },
@@ -392,6 +464,7 @@ export default function App() {
   const [productSearch, setProductSearch] = useState('');
   const [credit, setCredit] = useState<CreditSummary | null>(null);
   const [expenses, setExpenses] = useState<ExpenseSummary | null>(null);
+  const [lastCashUp, setLastCashUp] = useState<CashUp | null>(null);
   const strings = t(lang);
 
   // Initialize database and language on mount
@@ -409,6 +482,7 @@ export default function App() {
         await refreshProducts();
         await refreshCredit();
         await refreshExpenses();
+        await refreshCashUp();
       } catch (error) {
         console.error('Database init error:', error);
         Alert.alert('Error', 'Could not initialize database');
@@ -425,6 +499,15 @@ export default function App() {
     setLang(newLang);
     await AsyncStorage.setItem('shoptrack_language', newLang);
   };
+
+  // The most recent till count, for the Home signal.
+  const refreshCashUp = useCallback(async () => {
+    try {
+      setLastCashUp(await getLastCashUp(db));
+    } catch (error) {
+      console.error('Load cash up error:', error);
+    }
+  }, []);
 
   // Load this month's expenses for the Home summary.
   //
@@ -751,6 +834,22 @@ export default function App() {
             </View>
           )}
 
+          {/* A till that came up short last time. Surfaced on Home because it
+              is the one number an owner will not go looking for, and the one
+              most worth acting on. Opening floats have nothing to reconcile. */}
+          {lastCashUp && !lastCashUp.is_opening && lastCashUp.difference < -CASH_TOLERANCE && (
+            <TouchableOpacity
+              style={styles.shortfallCard}
+              onPress={() => setScreen('cashup')}
+            >
+              <Text style={styles.shortfallLabel}>{strings.CASHUP_SHORT}</Text>
+              <Text style={styles.shortfallAmount}>
+                R{Math.abs(lastCashUp.difference).toFixed(2)}
+              </Text>
+              <Text style={styles.shortfallHint}>{strings.CASHUP_HOME_SHORTFALL}</Text>
+            </TouchableOpacity>
+          )}
+
           {/* Credit book: what's out in the community */}
           {credit && summariseOutstanding(credit) && (
             <TouchableOpacity
@@ -840,6 +939,15 @@ export default function App() {
                 <Text style={styles.secondaryActionIcon}>🧾</Text>
                 <Text style={styles.secondaryActionText}>{strings.EXPENSES_HOME_BUTTON}</Text>
                 <Text style={styles.secondaryActionHint}>{strings.EXPENSES_HOME_HINT}</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.secondaryAction}
+                onPress={() => setScreen('cashup')}
+              >
+                <Text style={styles.secondaryActionIcon}>💰</Text>
+                <Text style={styles.secondaryActionText}>{strings.CASHUP_HOME_BUTTON}</Text>
+                <Text style={styles.secondaryActionHint}>{strings.CASHUP_HOME_HINT}</Text>
               </TouchableOpacity>
             </View>
             
@@ -1051,6 +1159,20 @@ export default function App() {
         strings={strings}
         onBack={() => setScreen('home')}
         onChanged={refreshExpenses}
+      />
+    );
+  }
+
+  // ==========================================
+  // SCREEN: Cash Up
+  // ==========================================
+  if (screen === 'cashup') {
+    return (
+      <CashUpScreen
+        db={db}
+        strings={strings}
+        onBack={() => setScreen('home')}
+        onChanged={refreshCashUp}
       />
     );
   }

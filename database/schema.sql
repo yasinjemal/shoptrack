@@ -189,6 +189,47 @@ CREATE INDEX idx_expenses_category ON expenses(category);
 
 
 -- ============================================
+-- TABLE: cash_ups
+-- ============================================
+-- End-of-day till counts.
+--
+-- WHY: a shop can be profitable and still bleed cash. Stock walks, change is
+-- given wrong, a sale goes in a pocket, an expense is paid and never written
+-- down. None of that shows up in profit -- the stock left the shelf either way,
+-- so the profit engine books the sale regardless. Only counting the cash finds
+-- it. See src/core/cashup.ts for the full trail.
+--
+-- ⚠️  expected_amount and difference are SNAPSHOTS, deliberately stored.
+--
+-- Everything feeding "expected" keeps moving: a backdated expense, a late
+-- stock-in, a corrected count all change what expected WOULD be if recomputed
+-- next week. The owner counted their till against the number the app showed at
+-- that moment, and that is the number the record must preserve. Recomputing
+-- would silently rewrite history and turn a balanced cash-up into a shortfall
+-- nobody can explain.
+--
+-- Contrast credit_entries, where balances are summed and never stored: there
+-- the ledger IS the truth. Here the reconciliation is an event that happened.
+--
+-- NOTE: expected_amount may legitimately be negative (more cash paid out than
+-- came in, so the owner topped up from elsewhere). counted_amount may not --
+-- a till cannot hold less than nothing.
+
+CREATE TABLE cash_ups (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    counted_amount   REAL NOT NULL CHECK (counted_amount >= 0),  -- What was in the till
+    expected_amount  REAL NOT NULL,                              -- Snapshot; may be negative
+    difference       REAL NOT NULL,                              -- Snapshot: counted - expected
+    taken_out        REAL NOT NULL DEFAULT 0 CHECK (taken_out >= 0),
+    is_opening       INTEGER NOT NULL DEFAULT 0,  -- First cash-up sets a float, does not reconcile
+    notes            TEXT,
+    recorded_at      INTEGER NOT NULL             -- Unix timestamp (ms)
+);
+
+CREATE INDEX idx_cash_ups_date ON cash_ups(recorded_at);
+
+
+-- ============================================
 -- NOT YET IMPLEMENTED
 -- ============================================
 -- Earlier drafts of this file defined period_snapshots, product_period_metrics

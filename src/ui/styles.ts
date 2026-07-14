@@ -100,6 +100,34 @@ export const styles = StyleSheet.create({
   },
 
   // Tier 3.3: Stock Value Card
+  // Cash missing from the till at the last cash-up. Red, and above everything
+  // else on Home, because it is the only card that means something is wrong.
+  shortfallCard: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    backgroundColor: '#FDF3F2',
+    padding: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  shortfallLabel: {
+    fontSize: 13,
+    color: '#C0392B',
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  shortfallAmount: {
+    fontSize: 26,
+    fontWeight: '700',
+    color: '#C0392B',
+  },
+  shortfallHint: {
+    fontSize: 12,
+    color: '#AAAAAA',
+    marginTop: 4,
+    textAlign: 'center',
+  },
+
   // Net profit: sales, minus costs, equals what the owner actually kept.
   // Laid out as a sum so the arithmetic is visible rather than asserted.
   netCard: {
@@ -290,14 +318,21 @@ export const styles = StyleSheet.create({
     opacity: 0.9,
     marginTop: 4,
   },
+  // Wraps into a grid rather than a single row. With five actions, `flex: 1`
+  // in a fixed row gives each about 56dp on a small phone and the labels get
+  // clipped. flexBasis puts three per row and lets the last row grow to fill.
   secondaryActions: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 12,
   },
   secondaryAction: {
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: '30%',
+    minWidth: 96,
     backgroundColor: '#FFFFFF',
-    padding: 20,
+    paddingVertical: 16,
+    paddingHorizontal: 12,
     borderRadius: 12,
     alignItems: 'center',
   },

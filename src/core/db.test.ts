@@ -22,21 +22,27 @@ import {
   addCustomer,
   deactivateCustomer,
   deleteExpense,
+  getLastCashUp,
+  loadCashUps,
   loadCreditEntries,
   loadCustomers,
   loadExpenses,
   loadMovements,
   loadProducts,
+  openingBalanceFrom,
+  recordCashUp,
   recordCount,
   recordCreditEntry,
   recordExpense,
   recordStockIn,
+  stockPurchaseTotal,
   toCoreProduct,
   type AppProduct,
 } from './db';
 import { calculateCreditSummary } from './credit';
 import { calculatePeriodSummary } from './calculations';
 import { calculateExpenseSummary, calculateNetProfit } from './expenses';
+import { calculateExpectedCash, cashTurnover, reconcile } from './cashup';
 
 let failures = 0;
 
@@ -249,6 +255,105 @@ async function run() {
 
   console.log('');
   console.log('========================================');
+  console.log('TEST: cash-up through real SQL');
+  console.log('========================================');
+
+  // The delivery recorded earlier cost R280 and came out of the till.
+  const purchases = await stockPurchaseTotal(db, MONDAY, MONDAY + 7 * DAY);
+  equal(purchases, 280, 'stock purchase total reads total_cost from real rows');
+
+  equal(openingBalanceFrom(null), null, 'no baseline before the first cash-up');
+  equal(await getLastCashUp(db), null, 'no cash-up yet');
+
+  // First cash-up sets the float, like the first stock count sets a baseline.
+  await recordCashUp(
+    db,
+    { counted: 500, expected: 0, difference: 0 },
+    { isOpening: true, notes: 'Starting float' },
+    MONDAY
+  );
+
+  const opening = await getLastCashUp(db);
+  equal(opening?.is_opening, true, 'the first cash-up is flagged as opening');
+  equal(openingBalanceFrom(opening), 500, 'opening balance is what was counted');
+
+  // Second cash-up: the real reconciliation, built from all four engines.
+  const inputs = {
+    opening: openingBalanceFrom(opening)!,
+    revenue: summary.total_estimated_revenue,
+    creditGiven: book.credit_given,
+    paymentsReceived: book.payments_received,
+    expenses: expenseSummary.total,
+    stockPurchases: purchases,
+  };
+  const trail = calculateExpectedCash(inputs);
+
+  // This shop paid R1,700 in costs against R540 of sales, so more cash left the
+  // till than entered it. Expected legitimately goes negative -- it means the
+  // owner covered the gap from somewhere the app cannot see. A till, though,
+  // can never hold less than nothing, which the schema enforces.
+  check(trail.expected < 0, 'expected cash can go negative when payouts exceed takings');
+
+  const counted = 0;
+  const result = reconcile(trail.expected, counted, cashTurnover(inputs));
+  equal(
+    result.verdict,
+    'over',
+    'an empty till against negative expected reads as over, not short'
+  );
+
+  const negativeCountRejected = await (async () => {
+    try {
+      await recordCashUp(db, { counted: -50, expected: 0, difference: -50 }, {}, MONDAY);
+      return false;
+    } catch {
+      return true;
+    }
+  })();
+  check(negativeCountRejected, 'the database refuses a negative till count');
+
+  await recordCashUp(db, result, { takenOut: 0 }, MONDAY + 5 * DAY);
+
+  const last = await getLastCashUp(db);
+  equal(last?.is_opening, false, 'a normal cash-up is not an opening one');
+  equal(last?.counted_amount, counted, 'counted amount round-trips');
+  equal(last?.expected_amount, result.expected, 'expected round-trips, negative and all');
+  equal(last?.difference, result.difference, 'difference round-trips');
+  equal(openingBalanceFrom(last), 0, 'an empty till leaves nothing for tomorrow');
+
+  // Taking money out lowers where the next cash-up starts.
+  await recordCashUp(
+    db,
+    { counted: 900, expected: 900, difference: 0 },
+    { takenOut: 400 },
+    MONDAY + 6 * DAY
+  );
+  const afterDraw = await getLastCashUp(db);
+  equal(afterDraw?.taken_out, 400, 'money taken out round-trips');
+  equal(
+    openingBalanceFrom(afterDraw),
+    500,
+    'next opening balance is what was left after taking money out'
+  );
+
+  const history = await loadCashUps(db);
+  equal(history.length, 3, 'every cash-up is stored');
+  equal(history[0].taken_out, 400, 'history comes back newest first');
+
+  // The stored expected must never be recomputed. A backdated expense changes
+  // what "expected" would be today, but the owner reconciled against the number
+  // they were shown.
+  const storedExpected = afterDraw!.expected_amount;
+  await recordExpense(db, 'OTHER', 999, 'backdated, entered late', MONDAY + 2 * DAY);
+  const afterBackdate = await getLastCashUp(db);
+  equal(
+    afterBackdate?.expected_amount,
+    storedExpected,
+    'a backdated expense does not rewrite a past cash-up'
+  );
+
+  console.log('');
+  console.log('========================================');
   console.log('TEST: an empty shop does not crash');
   console.log('========================================');
 
@@ -264,6 +369,15 @@ async function run() {
 
   const emptyExpenses = calculateExpenseSummary([], MONDAY, MONDAY + 7 * DAY);
   equal(emptyExpenses.total, 0, 'an empty expense list is zero, not NaN');
+
+  equal((await loadCashUps(emptyDb)).length, 0, 'no cash-ups');
+  equal(await getLastCashUp(emptyDb), null, 'no last cash-up');
+  // SUM() over no rows is NULL in SQL, which would poison every downstream sum.
+  equal(
+    await stockPurchaseTotal(emptyDb, MONDAY, MONDAY + 7 * DAY),
+    0,
+    'stock purchase total is 0, not null, when there are no deliveries'
+  );
 
   console.log('');
   if (failures > 0) {

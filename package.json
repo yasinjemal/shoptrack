@@ -7,10 +7,11 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "test": "npm run test:calc && npm run test:credit && npm run test:expenses && npm run test:schema && npm run test:db",
+    "test": "npm run test:calc && npm run test:credit && npm run test:expenses && npm run test:cashup && npm run test:schema && npm run test:db",
     "test:calc": "tsx src/core/calculations.test.ts",
     "test:credit": "tsx src/core/credit.test.ts",
     "test:expenses": "tsx src/core/expenses.test.ts",
+    "test:cashup": "tsx src/core/cashup.test.ts",
     "test:schema": "tsx src/core/schema.test.ts",
     "test:db": "tsx src/core/db.test.ts",
     "typecheck": "tsc --noEmit"

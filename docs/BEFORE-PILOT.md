@@ -215,8 +215,38 @@ not just on upgrade.
 
 ## Decisions that look like bugs — do not "fix" these
 
-Three places where the obviously-correct-looking change is wrong. Each has a
+Five places where the obviously-correct-looking change is wrong. Each has a
 test pinning it.
+
+### Stock purchases are cash-out, but are *not* an expense
+
+`src/core/cashup.ts` counts stock purchases. `src/core/expenses.ts` refuses to.
+
+This looks like a contradiction and is the single sharpest edge in the codebase.
+Both are right, because profit and cash disagree about what stock is:
+
+- **Profit**: a delivery is not a cost until the goods sell. Every unit sold is
+  already valued at its `buy_price`, so counting the delivery as an expense too
+  would charge the owner twice and fake a loss.
+- **Cash**: handing R800 to a supplier removes R800 from the till, today,
+  whatever the accounting says.
+
+Leave stock out of cash-up and every cash-up after a delivery reports a
+shortfall exactly the size of that delivery — sending the owner hunting a thief
+who is actually their supplier. A test asserts precisely this.
+
+### A cash-up's `expected` is stored, not recalculated
+
+`cash_ups.expected_amount` / `difference`
+
+Everything feeding "expected" keeps moving after the fact: a backdated expense,
+a late stock-in, a corrected count. Recomputing would silently rewrite history
+and turn a cash-up that balanced into a shortfall nobody can explain. The owner
+reconciled against the number the app showed them; that number is the record.
+
+Note this is the *opposite* of the credit rule below, and deliberately so. A
+credit balance is a live claim, so the ledger is the truth. A cash-up is an
+event that happened, so the snapshot is the truth.
 
 ### Profit and credit are never subtracted
 
@@ -260,6 +290,15 @@ mistakes are corrected by adding the opposite entry, not by editing history.
   that week's summary, so that week looks bad and the next looks good. This is
   what actually happened to the till, so it is honest — but it is not accrual
   accounting, and an owner may find it odd. Worth watching during the pilot.
+- **Cash-up needs a stock count to be accurate.** Revenue is inferred from
+  counts, so a cash-up with no count since the last one is comparing the till
+  against a guess, and the gap is meaningless. The screen warns and lets the
+  owner continue. If pilot shops routinely cash up without counting, the warning
+  is not enough and the flow needs rethinking — watch for this.
+- **Cash-up assumes one till and one person.** There is no shift handover and no
+  way to attribute a gap. In a shop where a spouse or child also serves
+  customers, a shortfall cannot be traced to a person or a time. That is
+  probably the right scope for now, but it limits what the number can tell you.
 - **Currency is hard-coded to Rands.** `R` is baked into strings and engines.
   Fine for South Africa; a real change if ShopTrack ever leaves it.
 - **No crash reporting.** If the app dies on a shop's phone during the pilot,
