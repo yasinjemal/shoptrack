@@ -100,6 +100,40 @@ export const styles = StyleSheet.create({
   },
 
   // Tier 3.3: Stock Value Card
+  // Database failed to open. Deliberately plain and non-alarming: the data is
+  // almost certainly fine, and the owner should not think it is gone.
+  dbErrorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 32,
+  },
+  dbErrorIcon: {
+    fontSize: 40,
+    marginBottom: 12,
+  },
+  dbErrorTitle: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#1A1A1A',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  dbErrorHint: {
+    fontSize: 14,
+    color: '#666666',
+    textAlign: 'center',
+    lineHeight: 21,
+    marginBottom: 20,
+  },
+  // The raw error, for whoever is debugging this rather than shopping.
+  dbErrorDetail: {
+    fontSize: 11,
+    color: '#BBBBBB',
+    textAlign: 'center',
+    fontStyle: 'italic',
+  },
+
   // Cash missing from the till at the last cash-up. Red, and above everything
   // else on Home, because it is the only card that means something is wrong.
   shortfallCard: {

@@ -68,6 +68,17 @@ npm start          # Expo dev server
 npm run android    # or: npm run ios / npm run web
 ```
 
+Android and iOS are the real targets. Web works and is handy for looking at
+screens quickly, but expo-sqlite's web driver is experimental — anything to do
+with data should be trusted only on a device.
+
+**One rule if you touch the database: never call SQLite synchronously.** On
+native, `execSync` and `execAsync` are interchangeable, so a sync call looks
+fine — and then the web build fails with `Sync operation timeout`, because the
+sync API reaches the SQLite worker by busy-waiting on a `SharedArrayBuffer`
+that a non-isolated browser never satisfies. `npm run test:db` scans for this
+and fails the suite. [docs/BEFORE-PILOT.md](docs/BEFORE-PILOT.md) has the detail.
+
 ### Tests
 
 Pure logic runs in plain node — no simulator, no device, about a second.

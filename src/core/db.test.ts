@@ -17,6 +17,8 @@
  */
 
 import { DatabaseSync } from 'node:sqlite';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { initDatabase, type MigrationDb } from './schema';
 import {
   addCustomer,
@@ -97,6 +99,7 @@ function adapt(db: DatabaseSync): any {
   };
 }
 
+const REPO_ROOT = join(__dirname, '..', '..');
 const DAY = 24 * 60 * 60 * 1000;
 const MONDAY = Date.UTC(2026, 1, 9, 8, 0, 0);
 
@@ -378,6 +381,47 @@ async function run() {
     0,
     'stock purchase total is 0, not null, when there are no deliveries'
   );
+
+  console.log('');
+  console.log('========================================');
+  console.log('TEST: no synchronous SQLite calls anywhere');
+  console.log('========================================');
+
+  // On web, expo-sqlite runs SQLite in a worker. The sync API reaches it by
+  // spinning on Atomics.load over a SharedArrayBuffer until the worker replies
+  // (expo-sqlite/web/WorkerChannel.ts) and gives up with "Sync operation
+  // timeout" when that is not satisfied -- which is routine in a browser that
+  // is not cross-origin isolated. The async API posts to the same worker and
+  // awaits a promise: nothing to time out.
+  //
+  // The two APIs are interchangeable on native, so this regression is invisible
+  // until someone opens the web build. Catch it here instead.
+  const SYNC_CALL = /\b(openDatabaseSync|openDatabaseSyncFromDb|execSync|runSync|getAllSync|getFirstSync|getEachSync|prepareSync|closeSync|withTransactionSync|isInTransactionSync|serializeSync)\s*\(/;
+
+  const sources: string[] = [];
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir)) {
+      const full = join(dir, entry);
+      if (statSync(full).isDirectory()) {
+        walk(full);
+      } else if (/\.tsx?$/.test(entry) && !/\.test\.tsx?$/.test(entry)) {
+        sources.push(full);
+      }
+    }
+  };
+  walk(join(REPO_ROOT, 'src'));
+  sources.push(join(REPO_ROOT, 'App.tsx'));
+
+  const offenders = sources.filter(f => SYNC_CALL.test(readFileSync(f, 'utf8')));
+  if (offenders.length > 0) {
+    failures++;
+    console.error(
+      `  FAIL synchronous SQLite call found -- this breaks the web build:\n` +
+      offenders.map(f => `         ${f.replace(REPO_ROOT, '.')}`).join('\n')
+    );
+  } else {
+    console.log(`  ok   ${sources.length} source files, all on the async path`);
+  }
 
   console.log('');
   if (failures > 0) {

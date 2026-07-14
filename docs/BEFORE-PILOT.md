@@ -152,6 +152,42 @@ Day 15. That is the real deadline for tripwires 1–3.
 
 ---
 
+## Never call SQLite synchronously
+
+Not a pre-pilot item — a permanent rule, recorded here because breaking it costs
+an afternoon and the symptom points nowhere near the cause.
+
+**Symptom:** on web, the UI, navigation and compilation all work perfectly, and
+then saving anything fails with `Sync operation timeout`.
+
+**Cause:** on web, expo-sqlite runs SQLite in a worker. The two APIs reach it
+very differently (`expo-sqlite/web/WorkerChannel.ts`):
+
+| API | How it reaches the worker | Fails when |
+|---|---|---|
+| `openDatabaseSync`, `execSync`, … | Spins on `Atomics.load` over a `SharedArrayBuffer` until the worker replies, then throws `Sync operation timeout` | The busy-wait is not satisfied — routine unless the page is properly cross-origin isolated |
+| `openDatabaseAsync`, `execAsync`, … | `postMessage` + await a promise | Nothing to time out |
+
+`SharedArrayBuffer` needs COOP/COEP headers *and* a browser that honours them.
+`metro.config.js` and `serve.js` set those headers, but headless and
+non-isolated contexts still leave the busy-wait unsatisfied. The async path
+needs none of it.
+
+**The trap:** on native, sync and async are interchangeable. A sync call works
+perfectly on Android and iOS, so the regression is invisible until someone opens
+the web build. That is why `db.test.ts` scans every source file for sync SQLite
+calls and fails the suite if one appears. Do not delete that check.
+
+**Rule:** every SQLite call goes through the async API. `src/core/db.ts` already
+does; the database is opened once with `openDatabaseAsync` in `App.tsx`.
+
+Worth knowing: expo-sqlite's own web driver is still experimental. If the async
+path ever starts failing too, the fallback is to treat web as a UI preview only
+and verify on a device — which is where it needs to be verified anyway
+(tripwire 3).
+
+---
+
 ## Writing a migration when you turn the reset off
 
 The v0→v1 migration was written, then deleted when it became clear there were

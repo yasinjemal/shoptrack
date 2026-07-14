@@ -67,6 +67,20 @@ import { CashUpScreen } from './src/ui/cashup/CashUpScreen';
 // DATABASE SETUP
 // ============================================
 
+/**
+ * Opened once in init() below, via openDatabaseAsync.
+ *
+ * Do NOT switch this back to openDatabaseSync. On native it makes no
+ * difference, but on web expo-sqlite runs SQLite in a worker, and the *sync*
+ * API reaches it by spinning on Atomics.load over a SharedArrayBuffer until the
+ * worker replies (expo-sqlite/web/WorkerChannel.ts). When that busy-wait is not
+ * satisfied -- which is routine in a non-cross-origin-isolated browser -- it
+ * gives up with "Sync operation timeout" and no data can be saved.
+ *
+ * Every async method posts to the same worker and awaits a promise instead:
+ * no SharedArrayBuffer, no busy-wait, nothing to time out. Keeping every
+ * database call on the async path is what makes the web build usable.
+ */
 let db: SQLite.SQLiteDatabase;
 
 // ============================================
@@ -129,6 +143,8 @@ const STRINGS = {
     ERROR_GENERIC: "Something went wrong",
     ERROR_BACKUP: "Could not create backup",
     ERROR_RESTORE: "Could not restore backup",
+    DB_ERROR_TITLE: "Can't open your shop data",
+    DB_ERROR_HINT: "Your data is still on this phone — ShopTrack just couldn't read it. Close the app and open it again. If it keeps happening, don't add anything new until it's fixed.",
     
     // Confidence Signals (Tier 3.2)
     BASED_ON_COUNTS: (n: number) => `Based on ${n} count${n !== 1 ? 's' : ''}`,
@@ -303,6 +319,8 @@ const STRINGS = {
     ERROR_GENERIC: "Kukhona okungahambanga kahle",
     ERROR_BACKUP: "Ayikwazanga ukwenza ibhekhi",
     ERROR_RESTORE: "Ayikwazanga ukubuyisela ibhekhi",
+    DB_ERROR_TITLE: "Ayikwazi ukuvula idatha yesitolo sakho",
+    DB_ERROR_HINT: "Idatha yakho isesekhona kule foni — i-ShopTrack ayikwazanga ukuyifunda. Vala uhlelo bese uyavula futhi. Uma kuqhubeka, ungangezi lutho olusha kuze kulungiswe.",
     
     // Confidence Signals (Tier 3.2)
     BASED_ON_COUNTS: (n: number) => `Kusekelwe ekubalweni oku-${n}`,
@@ -465,6 +483,7 @@ export default function App() {
   const [credit, setCredit] = useState<CreditSummary | null>(null);
   const [expenses, setExpenses] = useState<ExpenseSummary | null>(null);
   const [lastCashUp, setLastCashUp] = useState<CashUp | null>(null);
+  const [dbError, setDbError] = useState<string | null>(null);
   const strings = t(lang);
 
   // Initialize database and language on mount
@@ -477,7 +496,7 @@ export default function App() {
           setLang(savedLang);
         }
         
-        db = SQLite.openDatabaseSync('shoptrack.db');
+        db = await SQLite.openDatabaseAsync('shoptrack.db');
         await initDatabase(db);
         await refreshProducts();
         await refreshCredit();
@@ -485,7 +504,10 @@ export default function App() {
         await refreshCashUp();
       } catch (error) {
         console.error('Database init error:', error);
-        Alert.alert('Error', 'Could not initialize database');
+        // Kept verbatim: "Sync operation timeout" means someone reintroduced a
+        // sync SQLite call on web, and the exact wording is the fastest route
+        // back to the note above.
+        setDbError(error instanceof Error ? error.message : String(error));
       } finally {
         setLoading(false);
       }
@@ -741,6 +763,23 @@ export default function App() {
         <ActivityIndicator size="large" color="#4CAF50" />
         <Text style={styles.loadingText}>Starting ShopTrack...</Text>
       </View>
+    );
+  }
+
+  // The database failed to open. Falling through to Home would render an empty
+  // shop -- telling the owner their stock, their book, and their money are all
+  // gone. Say what actually happened instead.
+  if (dbError) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar style="dark" />
+        <View style={styles.dbErrorContainer}>
+          <Text style={styles.dbErrorIcon}>⚠️</Text>
+          <Text style={styles.dbErrorTitle}>{strings.DB_ERROR_TITLE}</Text>
+          <Text style={styles.dbErrorHint}>{strings.DB_ERROR_HINT}</Text>
+          <Text style={styles.dbErrorDetail}>{dbError}</Text>
+        </View>
+      </SafeAreaView>
     );
   }
 
