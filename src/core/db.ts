@@ -172,6 +172,7 @@ interface CreditEntryRow {
   type: 'CREDIT' | 'PAYMENT';
   amount: number;
   notes: string | null;
+  due_at: number | null;
   recorded_at: number;
 }
 
@@ -193,7 +194,7 @@ export async function loadCustomers(db: SQLiteDatabase): Promise<Customer[]> {
  */
 export async function loadCreditEntries(db: SQLiteDatabase): Promise<CreditEntry[]> {
   const rows = await db.getAllAsync<CreditEntryRow>(
-    `SELECT id, customer_id, type, amount, notes, recorded_at
+    `SELECT id, customer_id, type, amount, notes, due_at, recorded_at
      FROM credit_entries ORDER BY recorded_at`
   );
   return rows.map(r => ({
@@ -202,6 +203,7 @@ export async function loadCreditEntries(db: SQLiteDatabase): Promise<CreditEntry
     type: r.type,
     amount: r.amount,
     notes: r.notes ?? undefined,
+    due_at: r.due_at ?? undefined,
     recorded_at: r.recorded_at,
   }));
 }
@@ -232,14 +234,50 @@ export async function recordCreditEntry(
   type: CreditEntry['type'],
   amount: number,
   notes: string | null = null,
+  dueAt: number | null = null,
   now: number = Date.now()
 ): Promise<void> {
   await db.runAsync(
-    `INSERT INTO credit_entries (customer_id, type, amount, notes, recorded_at)
-     VALUES (?, ?, ?, ?, ?)`,
-    [customerId, type, amount, notes?.trim() || null, now]
+    `INSERT INTO credit_entries (customer_id, type, amount, notes, due_at, recorded_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    // A due date only means something on a debt: a payment is not promised, it
+    // has happened.
+    [customerId, type, amount, notes?.trim() || null, type === 'CREDIT' ? dueAt : null, now]
   );
   await db.runAsync('UPDATE customers SET updated_at = ? WHERE id = ?', [now, customerId]);
+}
+
+/**
+ * Add someone to the book, optionally with what they are taking right now.
+ *
+ * Both halves are written together because that is the real moment: a customer
+ * is at the counter with bread in their hand. Adding a bare name and then
+ * hunting for them to attach a debt is not a thing anyone does.
+ *
+ * `openingCredit` is optional -- an owner may genuinely want to add a regular
+ * ahead of time -- but the screen leads with it.
+ */
+export async function addCustomerToBook(
+  db: SQLiteDatabase,
+  details: { name: string; phone?: string | null },
+  openingCredit?: { amount: number; notes?: string | null; dueAt?: number | null },
+  now: number = Date.now()
+): Promise<number> {
+  const customerId = await addCustomer(db, details.name, details.phone ?? null, now);
+
+  if (openingCredit && openingCredit.amount > 0) {
+    await recordCreditEntry(
+      db,
+      customerId,
+      'CREDIT',
+      openingCredit.amount,
+      openingCredit.notes ?? null,
+      openingCredit.dueAt ?? null,
+      now
+    );
+  }
+
+  return customerId;
 }
 
 /**

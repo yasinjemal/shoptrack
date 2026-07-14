@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { initDatabase, type MigrationDb } from './schema';
 import {
   addCustomer,
+  addCustomerToBook,
   deactivateCustomer,
   deleteExpense,
   getLastCashUp,
@@ -110,6 +111,7 @@ async function freshDb() {
   return { raw, db };
 }
 
+
 async function run() {
   console.log('========================================');
   console.log('TEST: stock flows through real SQL');
@@ -174,9 +176,9 @@ async function run() {
   equal(customers[1].phone, '072 000 0000', 'phone round-trips');
   equal(customers[0].phone, undefined, 'a missing phone is undefined, not null');
 
-  await recordCreditEntry(db, thandiId, 'CREDIT', 120, 'Bread and milk', MONDAY + DAY);
-  await recordCreditEntry(db, thandiId, 'PAYMENT', 30, null, MONDAY + 3 * DAY);
-  await recordCreditEntry(db, siphoId, 'CREDIT', 200, null, MONDAY - 60 * DAY);
+  await recordCreditEntry(db, thandiId, 'CREDIT', 120, 'Bread and milk', null, MONDAY + DAY);
+  await recordCreditEntry(db, thandiId, 'PAYMENT', 30, null, null, MONDAY + 3 * DAY);
+  await recordCreditEntry(db, siphoId, 'CREDIT', 200, null, null, MONDAY - 60 * DAY);
 
   const entries = await loadCreditEntries(db);
   equal(entries.length, 3, 'all ledger entries are stored');
@@ -195,6 +197,77 @@ async function run() {
   equal(book.customers_owing, 2, 'both customers owe');
   equal(book.credit_given, 120, 'only this week\'s credit counts');
   equal(book.payments_received, 30, 'only this week\'s payments count');
+
+  console.log('');
+  console.log('========================================');
+  console.log('TEST: the journey — add someone, then find them');
+  console.log('========================================');
+
+  // This is the test that was missing. The engine tests all passed while the
+  // feature was unusable on a real phone, because they asserted the engine's
+  // intent instead of walking the path a shop owner walks: add a person, look
+  // at the list, expect to see them.
+  const { db: bookDb } = await freshDb();
+
+  const leratoId = await addCustomerToBook(
+    bookDb,
+    { name: 'Lerato', phone: null },
+    { amount: 90, notes: 'Bread and airtime', dueAt: MONDAY + 4 * DAY },
+    MONDAY
+  );
+
+  const bookAfterAdd = calculateCreditSummary(
+    await loadCustomers(bookDb),
+    await loadCreditEntries(bookDb),
+    MONDAY,
+    MONDAY + 7 * DAY,
+    MONDAY + DAY
+  );
+
+  equal(bookAfterAdd.everyone.length, 1, 'the person you just added is in the list');
+  equal(bookAfterAdd.everyone[0].customer_name, 'Lerato', 'and it is them');
+  equal(bookAfterAdd.everyone[0].balance, 90, 'with what they took already on the book');
+  equal(bookAfterAdd.total_outstanding, 90, 'and it counts toward what you are owed');
+  equal(bookAfterAdd.everyone[0].due_at, MONDAY + 4 * DAY, 'their promise is recorded');
+  equal(bookAfterAdd.everyone[0].is_overdue, false, 'and is not yet broken');
+
+  // Adding a bare name must also work, and must not vanish.
+  await addCustomerToBook(bookDb, { name: 'Bare Name' }, undefined, MONDAY);
+  const withBare = calculateCreditSummary(
+    await loadCustomers(bookDb),
+    await loadCreditEntries(bookDb),
+    MONDAY,
+    MONDAY + 7 * DAY,
+    MONDAY + DAY
+  );
+  equal(withBare.everyone.length, 2, 'someone added with no debt is still listed');
+  equal(withBare.owing.length, 1, 'but only the debtor shows under "who owes me"');
+  check(
+    withBare.everyone.some(b => b.customer_name === 'Bare Name' && b.balance === 0),
+    'the bare name is present, reachable, and owes nothing'
+  );
+
+  // Once the promised day passes, they read as overdue.
+  const lateBook = calculateCreditSummary(
+    await loadCustomers(bookDb),
+    await loadCreditEntries(bookDb),
+    MONDAY,
+    MONDAY + 30 * DAY,
+    MONDAY + 10 * DAY
+  );
+  equal(lateBook.customers_overdue, 1, 'a passed promise shows up as overdue');
+  equal(lateBook.overdue_debts[0].customer_name, 'Lerato', 'naming who is late');
+  equal(lateBook.overdue_debts[0].days_overdue, 6, 'and by how long');
+
+  // The due date must survive the round-trip through SQL.
+  const storedEntries = await loadCreditEntries(bookDb);
+  equal(storedEntries[0].due_at, MONDAY + 4 * DAY, 'due_at round-trips');
+  equal(leratoId, 1, 'addCustomerToBook returns the new id');
+
+  // A payment is not a promise, so it must never carry a due date.
+  await recordCreditEntry(bookDb, leratoId, 'PAYMENT', 50, null, MONDAY + 99 * DAY, MONDAY + 5 * DAY);
+  const payment = (await loadCreditEntries(bookDb)).find(e => e.type === 'PAYMENT');
+  equal(payment?.due_at, undefined, 'a due date passed to a payment is dropped');
 
   console.log('');
   console.log('========================================');

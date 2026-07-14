@@ -146,6 +146,19 @@ CREATE TABLE credit_entries (
 
     amount       REAL NOT NULL CHECK (amount > 0),  -- Always positive; type gives direction
     notes        TEXT,                              -- "Bread and milk"
+
+    -- When the customer SAID they would pay, on a CREDIT entry. NULL means they
+    -- did not say -- common, and it must stay allowed: demanding a date would
+    -- stop the owner recording the debt at all. It is a promise, not a
+    -- schedule. Nothing enforces it; it only lets the app say "this one is
+    -- late", which is a sharper signal than mere silence.
+    --
+    -- Payments settle oldest debts first (FIFO, in src/core/credit.ts), so the
+    -- live promise is the one on the oldest still-unpaid credit. Without that
+    -- allocation, a customer who took credit in January (paid) and again in
+    -- March would look overdue against January's kept promise forever.
+    due_at       INTEGER,
+
     recorded_at  INTEGER NOT NULL,                  -- Unix timestamp (ms)
 
     FOREIGN KEY (customer_id) REFERENCES customers(id)

@@ -42,6 +42,7 @@ import {
   calculateCreditSummary,
   summariseOutstanding,
   type CreditSummary,
+  type DueOptionKey,
 } from './src/core/credit';
 import { CASH_TOLERANCE } from './src/core/cashup';
 import {
@@ -189,19 +190,33 @@ const STRINGS = {
     CREDIT_WEEK_SUMMARY: (given: string, paid: string) => `This week: ${given} given, ${paid} paid back`,
     CREDIT_STALE_TITLE: "Not paid for a long time",
     CREDIT_STALE_HINT: "These people may need a reminder.",
+    CREDIT_OVERDUE_TITLE: "Said they would pay by now",
+    CREDIT_OVERDUE_HINT: "They named a day and it has passed.",
     CREDIT_ADD_CUSTOMER: "Add Person",
     CREDIT_CUSTOMER_NAME: "Name",
     CREDIT_CUSTOMER_PHONE: "Phone",
     CREDIT_PHONE_OPTIONAL: "Optional — leave empty if you don't have it.",
+    CREDIT_TAKING_NOW: "How much are they taking?",
+    CREDIT_TAKING_HINT: "Leave empty if they're not taking anything yet.",
+    CREDIT_WHEN_PAY: "When will they pay?",
+    CREDIT_DUE_OPTION: (key: DueOptionKey) => ({
+      friday: 'Friday',
+      end_of_month: 'End of month',
+      two_weeks: 'In 2 weeks',
+      unknown: "Didn't say",
+    })[key],
     CREDIT_GIVE: "Gave credit",
     CREDIT_RECEIVE: "Got paid",
     CREDIT_AMOUNT: "How much?",
-    CREDIT_NOTE: "Note",
+    CREDIT_NOTE: "What did they take?",
     CREDIT_NOTE_HINT: "Bread and milk",
     CREDIT_SAVE: "Save",
     CREDIT_SAVING: "Saving...",
     CREDIT_DAYS_QUIET: (days: number) => days === 0 ? "today" : days === 1 ? "1 day ago" : `${days} days ago`,
+    CREDIT_DUE_IN: (days: number) => days === 0 ? "Says they'll pay today" : days === 1 ? "Says they'll pay tomorrow" : `Says they'll pay in ${days} days`,
+    CREDIT_OVERDUE_BY: (days: number) => days === 0 ? "was due today" : days === 1 ? "1 day late" : `${days} days late`,
     CREDIT_PAID_UP: "They will be all paid up",
+    CREDIT_PAID_UP_TAG: "Paid up",
     CREDIT_OWES_YOU_CHANGE: "You owe them change",
     // Shown next to profit, never subtracted from it (see src/core/credit.ts)
     CREDIT_NOT_IN_HAND: (amount: string) => `${amount} of this is still owed to you.`,
@@ -365,19 +380,33 @@ const STRINGS = {
     CREDIT_WEEK_SUMMARY: (given: string, paid: string) => `Kuleli viki: ${given} onikeziwe, ${paid} okhokhiwe`,
     CREDIT_STALE_TITLE: "Abangakhokhanga isikhathi eside",
     CREDIT_STALE_HINT: "Laba bantu bangase badinge isikhumbuzo.",
+    CREDIT_OVERDUE_TITLE: "Bathi bazobe sebekhokhile manje",
+    CREDIT_OVERDUE_HINT: "Basho usuku futhi seludlulile.",
     CREDIT_ADD_CUSTOMER: "Engeza Umuntu",
     CREDIT_CUSTOMER_NAME: "Igama",
     CREDIT_CUSTOMER_PHONE: "Ucingo",
     CREDIT_PHONE_OPTIONAL: "Akuphoqelekile — shiya kungenalutho uma ungenalo.",
+    CREDIT_TAKING_NOW: "Bathatha malini?",
+    CREDIT_TAKING_HINT: "Shiya kungenalutho uma bengathathi lutho okwamanje.",
+    CREDIT_WHEN_PAY: "Bazokhokha nini?",
+    CREDIT_DUE_OPTION: (key: DueOptionKey) => ({
+      friday: 'NgoLwesihlanu',
+      end_of_month: 'Ekupheleni kwenyanga',
+      two_weeks: 'Emavikini ama-2',
+      unknown: 'Abashongo',
+    })[key],
     CREDIT_GIVE: "Unikeze isikweletu",
     CREDIT_RECEIVE: "Ukhokhelwe",
     CREDIT_AMOUNT: "Malini?",
-    CREDIT_NOTE: "Inothi",
+    CREDIT_NOTE: "Bathathe ini?",
     CREDIT_NOTE_HINT: "Isinkwa nobisi",
     CREDIT_SAVE: "Gcina",
     CREDIT_SAVING: "Iyagcina...",
     CREDIT_DAYS_QUIET: (days: number) => days === 0 ? "namuhla" : days === 1 ? "izolo" : `ezinsukwini ezingu-${days} ezedlule`,
+    CREDIT_DUE_IN: (days: number) => days === 0 ? "Uthi uzokhokha namuhla" : days === 1 ? "Uthi uzokhokha kusasa" : `Uthi uzokhokha ezinsukwini ezingu-${days}`,
+    CREDIT_OVERDUE_BY: (days: number) => days === 0 ? "bekufanele akhokhe namuhla" : days === 1 ? "usuku olu-1 emuva" : `izinsuku ezingu-${days} emuva`,
     CREDIT_PAID_UP: "Bazobe sebekhokhile ngokugcwele",
+    CREDIT_PAID_UP_TAG: "Ukhokhile",
     CREDIT_OWES_YOU_CHANGE: "Ubakweleta ushintshi",
     CREDIT_NOT_IN_HAND: (amount: string) => `${amount} kulokhu usakukweletwa.`,
 
@@ -903,7 +932,12 @@ export default function App() {
                 {credit.customers_owing === 1
                   ? '1 person'
                   : `${credit.customers_owing} people`}
-                {credit.customers_stale > 0 && ` · ${credit.customers_stale} not paid in a while`}
+                {/* A broken promise beats general silence as a signal. */}
+                {credit.customers_overdue > 0
+                  ? ` · ${credit.customers_overdue} late`
+                  : credit.customers_stale > 0
+                    ? ` · ${credit.customers_stale} not paid in a while`
+                    : ''}
               </Text>
             </TouchableOpacity>
           )}

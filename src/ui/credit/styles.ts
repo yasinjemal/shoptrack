@@ -46,6 +46,61 @@ export const creditStyles = StyleSheet.create({
     textAlign: 'center',
   },
 
+  // Broken promises. Above the quiet debts, because a named day that has passed
+  // is more actionable than silence.
+  overdueCard: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    backgroundColor: '#FDF3F2',
+    padding: 16,
+    borderRadius: 12,
+  },
+  overdueTitle: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#C0392B',
+    marginBottom: 8,
+  },
+  overdueItem: {
+    fontSize: 14,
+    color: '#555555',
+    marginBottom: 4,
+  },
+  overdueHint: {
+    fontSize: 11,
+    color: '#AAAAAA',
+    marginTop: 6,
+    fontStyle: 'italic',
+  },
+
+  // "When will you pay?" -- chips, not a calendar
+  dueGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 4,
+  },
+  dueChip: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+  },
+  dueChipActive: {
+    borderColor: '#4CAF50',
+    backgroundColor: '#F1F8F2',
+  },
+  dueChipText: {
+    fontSize: 14,
+    color: '#666666',
+  },
+  dueChipTextActive: {
+    color: '#2E7D32',
+    fontWeight: '600',
+  },
+
   // Debts that have gone quiet
   staleCard: {
     marginHorizontal: 16,
@@ -101,10 +156,22 @@ export const creditStyles = StyleSheet.create({
   customerBalanceCredit: {
     color: '#4CAF50',
   },
+  customerCardSettled: {
+    backgroundColor: '#FBFBFB',
+  },
+  customerSettledTag: {
+    fontSize: 12,
+    color: '#4CAF50',
+    fontWeight: '500',
+  },
   customerMeta: {
     fontSize: 12,
     color: '#AAAAAA',
     marginTop: 2,
+  },
+  customerMetaOverdue: {
+    color: '#C0392B',
+    fontWeight: '500',
   },
   customerActions: {
     flexDirection: 'row',

@@ -26,7 +26,7 @@ export interface MigrationDb {
  * Bump this whenever the table shape changes. While ALLOW_DESTRUCTIVE_RESET is
  * on, bumping it is all you need to do -- the app rebuilds itself on next boot.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /**
  * ⚠️  PRE-RELEASE ONLY. THIS ERASES THE DATABASE.
@@ -115,6 +115,11 @@ const CREATE_CUSTOMERS = `
  * amount is always positive. `type` gives it direction:
  *   CREDIT  = customer took goods, owes more
  *   PAYMENT = customer paid, owes less
+ *
+ * due_at is when the customer SAID they would pay, on a CREDIT entry. Null
+ * means they did not say, which is common and must stay allowed -- demanding a
+ * date would stop the owner recording the debt at all. It is a promise, not a
+ * schedule: nothing enforces it, it only lets the app say "this one is late".
  */
 const CREATE_CREDIT_ENTRIES = `
   CREATE TABLE IF NOT EXISTS credit_entries (
@@ -123,6 +128,7 @@ const CREATE_CREDIT_ENTRIES = `
     type         TEXT NOT NULL CHECK (type IN ('CREDIT', 'PAYMENT')),
     amount       REAL NOT NULL CHECK (amount > 0),
     notes        TEXT,
+    due_at       INTEGER,
     recorded_at  INTEGER NOT NULL,
     FOREIGN KEY (customer_id) REFERENCES customers(id)
   );

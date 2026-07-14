@@ -27,8 +27,19 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import type { SQLiteDatabase } from 'expo-sqlite';
 
-import { calculateCreditSummary, type CreditSummary, type CustomerBalance } from '../../core/credit';
-import { addCustomer, loadCreditEntries, loadCustomers, recordCreditEntry } from '../../core/db';
+import {
+  calculateCreditSummary,
+  dueDateOptions,
+  type CreditSummary,
+  type CustomerBalance,
+  type DueOptionKey,
+} from '../../core/credit';
+import {
+  addCustomerToBook,
+  loadCreditEntries,
+  loadCustomers,
+  recordCreditEntry,
+} from '../../core/db';
 import { getPeriodBounds } from '../../core/calculations';
 import { styles } from '../styles';
 import { creditStyles as cs } from './styles';
@@ -48,10 +59,16 @@ export interface CreditStrings {
   CREDIT_WEEK_SUMMARY: (given: string, paid: string) => string;
   CREDIT_STALE_TITLE: string;
   CREDIT_STALE_HINT: string;
+  CREDIT_OVERDUE_TITLE: string;
+  CREDIT_OVERDUE_HINT: string;
   CREDIT_ADD_CUSTOMER: string;
   CREDIT_CUSTOMER_NAME: string;
   CREDIT_CUSTOMER_PHONE: string;
   CREDIT_PHONE_OPTIONAL: string;
+  CREDIT_TAKING_NOW: string;
+  CREDIT_TAKING_HINT: string;
+  CREDIT_WHEN_PAY: string;
+  CREDIT_DUE_OPTION: (key: DueOptionKey) => string;
   CREDIT_GIVE: string;
   CREDIT_RECEIVE: string;
   CREDIT_AMOUNT: string;
@@ -60,7 +77,10 @@ export interface CreditStrings {
   CREDIT_SAVE: string;
   CREDIT_SAVING: string;
   CREDIT_DAYS_QUIET: (days: number) => string;
+  CREDIT_DUE_IN: (days: number) => string;
+  CREDIT_OVERDUE_BY: (days: number) => string;
   CREDIT_PAID_UP: string;
+  CREDIT_PAID_UP_TAG: string;
   CREDIT_OWES_YOU_CHANGE: string;
   ERROR_GENERIC: string;
 }
@@ -146,20 +166,39 @@ export function CreditScreen({
 
       {loading || !summary ? null : (
         <ScrollView style={cs.list}>
-          {summary.balances.length === 0 ? (
+          {/* Renders from everyone, NOT balances. Someone who owes nothing
+              must stay visible and reachable -- otherwise a person vanishes the
+              moment they are added and can never be given credit. */}
+          {summary.everyone.length === 0 ? (
             <EmptyBook strings={strings} onAdd={() => setMode({ kind: 'add_customer' })} />
           ) : (
             <>
-              <View style={cs.totalCard}>
-                <Text style={cs.totalLabel}>{strings.CREDIT_OUTSTANDING_LABEL}</Text>
-                <Text style={cs.totalAmount}>R{summary.total_outstanding.toFixed(2)}</Text>
-                <Text style={cs.totalHint}>
-                  {strings.CREDIT_WEEK_SUMMARY(
-                    `R${summary.credit_given.toFixed(2)}`,
-                    `R${summary.payments_received.toFixed(2)}`
-                  )}
-                </Text>
-              </View>
+              {summary.total_outstanding > 0 && (
+                <View style={cs.totalCard}>
+                  <Text style={cs.totalLabel}>{strings.CREDIT_OUTSTANDING_LABEL}</Text>
+                  <Text style={cs.totalAmount}>R{summary.total_outstanding.toFixed(2)}</Text>
+                  <Text style={cs.totalHint}>
+                    {strings.CREDIT_WEEK_SUMMARY(
+                      `R${summary.credit_given.toFixed(2)}`,
+                      `R${summary.payments_received.toFixed(2)}`
+                    )}
+                  </Text>
+                </View>
+              )}
+
+              {/* A broken promise is more actionable than silence, so it leads. */}
+              {summary.overdue_debts.length > 0 && (
+                <View style={cs.overdueCard}>
+                  <Text style={cs.overdueTitle}>{strings.CREDIT_OVERDUE_TITLE}</Text>
+                  {summary.overdue_debts.map(d => (
+                    <Text key={d.customer_id} style={cs.overdueItem}>
+                      • {d.customer_name} — R{d.balance.toFixed(2)},{' '}
+                      {strings.CREDIT_OVERDUE_BY(d.days_overdue ?? 0)}
+                    </Text>
+                  ))}
+                  <Text style={cs.overdueHint}>{strings.CREDIT_OVERDUE_HINT}</Text>
+                </View>
+              )}
 
               {summary.stale_debts.length > 0 && (
                 <View style={cs.staleCard}>
@@ -174,7 +213,7 @@ export function CreditScreen({
                 </View>
               )}
 
-              {summary.balances.map(balance => (
+              {summary.everyone.map(balance => (
                 <CustomerRow
                   key={balance.customer_id}
                   balance={balance}
@@ -183,6 +222,8 @@ export function CreditScreen({
                   onReceive={() => setMode({ kind: 'entry', customer: balance, type: 'PAYMENT' })}
                 />
               ))}
+
+              <View style={{ height: 32 }} />
             </>
           )}
         </ScrollView>
@@ -215,39 +256,78 @@ function CustomerRow({
   onGive: () => void;
   onReceive: () => void;
 }) {
-  // A negative balance means the shop owes them change -- say so rather than
-  // showing a minus sign the owner has to decode.
   const owesShop = balance.balance > 0;
+  const isSettled = balance.balance === 0;
 
+  // Someone who owes nothing is shown quietly, but shown. They are how you give
+  // credit to a regular again.
   return (
-    <View style={cs.customerCard}>
+    <View style={[cs.customerCard, isSettled && cs.customerCardSettled]}>
       <View style={cs.customerHeader}>
         <Text style={cs.customerName}>{balance.customer_name}</Text>
-        <Text style={[cs.customerBalance, !owesShop && cs.customerBalanceCredit]}>
-          R{Math.abs(balance.balance).toFixed(2)}
-        </Text>
+        {isSettled ? (
+          <Text style={cs.customerSettledTag}>{strings.CREDIT_PAID_UP_TAG}</Text>
+        ) : (
+          <Text style={[cs.customerBalance, !owesShop && cs.customerBalanceCredit]}>
+            R{Math.abs(balance.balance).toFixed(2)}
+          </Text>
+        )}
       </View>
 
-      <Text style={cs.customerMeta}>
-        {!owesShop
-          ? strings.CREDIT_OWES_YOU_CHANGE
-          : balance.days_since_activity != null
-            ? strings.CREDIT_DAYS_QUIET(balance.days_since_activity)
-            : ''}
+      <Text style={[cs.customerMeta, balance.is_overdue && cs.customerMetaOverdue]}>
+        {describeMeta(balance, strings)}
       </Text>
 
       <View style={cs.customerActions}>
         <TouchableOpacity style={cs.giveButton} onPress={onGive}>
           <Text style={cs.giveButtonText}>{strings.CREDIT_GIVE}</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={cs.receiveButton} onPress={onReceive}>
-          <Text style={cs.receiveButtonText}>{strings.CREDIT_RECEIVE}</Text>
-        </TouchableOpacity>
+        {/* Nothing to collect from someone who is square. */}
+        {!isSettled && (
+          <TouchableOpacity style={cs.receiveButton} onPress={onReceive}>
+            <Text style={cs.receiveButtonText}>{strings.CREDIT_RECEIVE}</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
 }
 
+/**
+ * The single most useful line under a name. Ordered by what an owner would ask
+ * first: are they late, when are they due, then how long it has been quiet.
+ */
+function describeMeta(balance: CustomerBalance, strings: CreditStrings): string {
+  if (balance.balance === 0) return '';
+  if (balance.balance < 0) return strings.CREDIT_OWES_YOU_CHANGE;
+
+  if (balance.is_overdue) {
+    return strings.CREDIT_OVERDUE_BY(balance.days_overdue ?? 0);
+  }
+
+  if (balance.due_at != null) {
+    const days = Math.max(0, Math.ceil((balance.due_at - Date.now()) / (24 * 60 * 60 * 1000)));
+    return strings.CREDIT_DUE_IN(days);
+  }
+
+  return balance.days_since_activity != null
+    ? strings.CREDIT_DAYS_QUIET(balance.days_since_activity)
+    : '';
+}
+
+/**
+ * Add someone to the book.
+ *
+ * Leads with what they are taking, because that is the actual moment: a
+ * customer is at the counter with bread in their hand. The earlier version
+ * captured only a name, which meant the owner had to add a person and then go
+ * find them to attach the debt -- a step nobody would take, and one that did
+ * not even work.
+ *
+ * Only the name is required. Amount, note, phone and the promised day are all
+ * optional: any one of them being mandatory is a reason to skip recording the
+ * debt at all, and a debt in the app beats a perfect record that never happens.
+ */
 function AddCustomerScreen({
   db,
   strings,
@@ -261,15 +341,29 @@ function AddCustomerScreen({
 }) {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
+  const [amount, setAmount] = useState('');
+  const [notes, setNotes] = useState('');
+  const [due, setDue] = useState<DueOptionKey | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // Recomputed per render so a screen left open overnight does not offer
+  // yesterday's Friday.
+  const options = dueDateOptions();
+  const value = parseFloat(amount) || 0;
   const canSave = name.trim().length > 0 && !saving;
 
   const handleSave = async () => {
     if (!canSave) return;
     setSaving(true);
     try {
-      await addCustomer(db, name, phone || null);
+      const chosen = options.find(o => o.key === due);
+      await addCustomerToBook(
+        db,
+        { name, phone: phone || null },
+        value > 0
+          ? { amount: value, notes: notes || null, dueAt: chosen?.at ?? null }
+          : undefined
+      );
       onSaved();
     } catch (error) {
       console.error('Add customer error:', error);
@@ -290,7 +384,7 @@ function AddCustomerScreen({
         <View style={{ width: 50 }} />
       </View>
 
-      <ScrollView style={cs.form}>
+      <ScrollView style={cs.form} keyboardShouldPersistTaps="handled">
         <Text style={styles.inputLabel}>{strings.CREDIT_CUSTOMER_NAME}</Text>
         <TextInput
           style={styles.textInput}
@@ -299,6 +393,47 @@ function AddCustomerScreen({
           placeholder="Thandi"
           autoFocus
         />
+
+        <Text style={styles.inputLabel}>{strings.CREDIT_TAKING_NOW}</Text>
+        <View style={styles.priceInputRow}>
+          <Text style={styles.currencyPrefix}>R</Text>
+          <TextInput
+            style={styles.priceInput}
+            value={amount}
+            onChangeText={setAmount}
+            placeholder="0.00"
+            keyboardType="decimal-pad"
+          />
+        </View>
+        <Text style={styles.inputHint}>{strings.CREDIT_TAKING_HINT}</Text>
+
+        {/* The rest only matters once there is a debt to describe. */}
+        {value > 0 && (
+          <>
+            <Text style={styles.inputLabel}>{strings.CREDIT_NOTE}</Text>
+            <TextInput
+              style={styles.textInput}
+              value={notes}
+              onChangeText={setNotes}
+              placeholder={strings.CREDIT_NOTE_HINT}
+            />
+
+            <Text style={styles.inputLabel}>{strings.CREDIT_WHEN_PAY}</Text>
+            <View style={cs.dueGrid}>
+              {options.map(o => (
+                <TouchableOpacity
+                  key={o.key}
+                  style={[cs.dueChip, due === o.key && cs.dueChipActive]}
+                  onPress={() => setDue(o.key)}
+                >
+                  <Text style={[cs.dueChipText, due === o.key && cs.dueChipTextActive]}>
+                    {strings.CREDIT_DUE_OPTION(o.key)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
 
         <Text style={styles.inputLabel}>{strings.CREDIT_CUSTOMER_PHONE}</Text>
         <TextInput
@@ -319,6 +454,8 @@ function AddCustomerScreen({
             {saving ? strings.CREDIT_SAVING : strings.CREDIT_SAVE}
           </Text>
         </TouchableOpacity>
+
+        <View style={{ height: 32 }} />
       </ScrollView>
     </SafeAreaView>
   );
@@ -341,8 +478,10 @@ function RecordEntryScreen({
 }) {
   const [amount, setAmount] = useState('');
   const [notes, setNotes] = useState('');
+  const [due, setDue] = useState<DueOptionKey | null>(null);
   const [saving, setSaving] = useState(false);
 
+  const options = dueDateOptions();
   const value = parseFloat(amount) || 0;
   const canSave = value > 0 && !saving;
 
@@ -355,7 +494,15 @@ function RecordEntryScreen({
     if (!canSave) return;
     setSaving(true);
     try {
-      await recordCreditEntry(db, customer.customer_id, type, value, notes || null);
+      const chosen = options.find(o => o.key === due);
+      await recordCreditEntry(
+        db,
+        customer.customer_id,
+        type,
+        value,
+        notes || null,
+        chosen?.at ?? null
+      );
       onSaved();
     } catch (error) {
       console.error('Record credit entry error:', error);
@@ -413,6 +560,26 @@ function RecordEntryScreen({
           placeholder={strings.CREDIT_NOTE_HINT}
         />
 
+        {/* Only a debt can be promised. A payment has already happened. */}
+        {type === 'CREDIT' && (
+          <>
+            <Text style={styles.inputLabel}>{strings.CREDIT_WHEN_PAY}</Text>
+            <View style={cs.dueGrid}>
+              {options.map(o => (
+                <TouchableOpacity
+                  key={o.key}
+                  style={[cs.dueChip, due === o.key && cs.dueChipActive]}
+                  onPress={() => setDue(o.key)}
+                >
+                  <Text style={[cs.dueChipText, due === o.key && cs.dueChipTextActive]}>
+                    {strings.CREDIT_DUE_OPTION(o.key)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
+
         <TouchableOpacity
           style={[styles.saveButton, !canSave && styles.saveButtonDisabled]}
           onPress={handleSave}
@@ -422,6 +589,8 @@ function RecordEntryScreen({
             {saving ? strings.CREDIT_SAVING : strings.CREDIT_SAVE}
           </Text>
         </TouchableOpacity>
+
+        <View style={{ height: 32 }} />
       </ScrollView>
     </SafeAreaView>
   );

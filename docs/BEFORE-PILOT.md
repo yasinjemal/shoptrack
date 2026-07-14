@@ -152,6 +152,34 @@ Day 15. That is the real deadline for tripwires 1–3.
 
 ---
 
+## There are no UI tests, and that has already cost a shipped bug
+
+Every engine here is covered. No screen is.
+
+The credit book shipped completely unusable: tapping "Add" appeared to do
+nothing. A new customer has a zero balance, the summary filtered zero balances
+out of the array the screen was rendering, so the person vanished the moment
+they were created — and could then never be given credit, because they never
+appeared to tap. **Every test passed.** They asserted the engine's own intent
+("paid-up customers drop off the list" — correct!) while the feature was dead. A
+shop owner found it in about a minute on a real phone.
+
+Two things came out of it, and neither is a fix:
+
+- `CreditSummary` now names the arrays `owing` and `everyone`, so which one a
+  screen should render is obvious. That reduces the odds; it does not close the
+  hole.
+- `db.test.ts` walks the journey — add a person, then look for them — rather
+  than only checking the maths. Do this for new features.
+
+**The real gap remains: nothing renders a component in CI.** Engine tests
+answer "is the arithmetic right?", never "can a person use this?". Until that
+changes, a feature is not done when the tests pass — it is done when it has been
+tapped through on a phone. Budget for that on every feature, and expect the
+pilot to find this class of thing.
+
+---
+
 ## Never call SQLite synchronously
 
 Not a pre-pilot item — a permanent rule, recorded here because breaking it costs
