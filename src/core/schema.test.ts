@@ -71,7 +71,14 @@ function describe(d: DatabaseSync, table: string) {
     .join('\n');
 }
 
-const TABLES = ['products', 'stock_movements', 'count_sessions', 'customers', 'credit_entries'];
+const TABLES = [
+  'products',
+  'stock_movements',
+  'count_sessions',
+  'customers',
+  'credit_entries',
+  'expenses',
+];
 
 async function run() {
   console.log('========================================');
@@ -127,6 +134,34 @@ async function run() {
   check(badTypeRejected, 'CHECK constraint rejects an unknown credit entry type');
 
   freshRaw.exec('DELETE FROM customers');
+
+  // Buying stock is already the cost side of gross profit. If a 'STOCK'
+  // expense category ever became insertable, every delivery would be charged
+  // twice and a healthy shop would report a loss. The CHECK is the guard.
+  let stockCategoryRejected = false;
+  try {
+    freshRaw.exec(
+      `INSERT INTO expenses (category, amount, recorded_at) VALUES ('STOCK', 500, 0)`
+    );
+  } catch {
+    stockCategoryRejected = true;
+  }
+  check(stockCategoryRejected, 'CHECK constraint rejects a STOCK expense category');
+
+  let negativeExpenseRejected = false;
+  try {
+    freshRaw.exec(
+      `INSERT INTO expenses (category, amount, recorded_at) VALUES ('RENT', -100, 0)`
+    );
+  } catch {
+    negativeExpenseRejected = true;
+  }
+  check(negativeExpenseRejected, 'CHECK constraint rejects a negative expense');
+
+  freshRaw.exec(`INSERT INTO expenses (category, amount, recorded_at) VALUES ('RENT', 1500, 0)`);
+  const goodExpense = freshRaw.prepare('SELECT COUNT(*) as c FROM expenses').get() as { c: number };
+  equal(goodExpense.c, 1, 'a valid expense is accepted');
+  freshRaw.exec('DELETE FROM expenses');
 
   console.log('');
   console.log('========================================');

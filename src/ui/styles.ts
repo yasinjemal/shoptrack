@@ -100,6 +100,64 @@ export const styles = StyleSheet.create({
   },
 
   // Tier 3.3: Stock Value Card
+  // Net profit: sales, minus costs, equals what the owner actually kept.
+  // Laid out as a sum so the arithmetic is visible rather than asserted.
+  netCard: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#EEEEEE',
+    padding: 16,
+  },
+  netRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 4,
+  },
+  netRowLabel: {
+    fontSize: 14,
+    color: '#888888',
+  },
+  netRowValue: {
+    fontSize: 15,
+    color: '#1A1A1A',
+    fontWeight: '500',
+  },
+  netRowCost: {
+    fontSize: 15,
+    color: '#C0392B',
+    fontWeight: '500',
+  },
+  netDivider: {
+    height: 1,
+    backgroundColor: '#EEEEEE',
+    marginVertical: 8,
+  },
+  netKeptLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1A1A1A',
+  },
+  netKeptValue: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#4CAF50',
+  },
+  netKeptLoss: {
+    color: '#C0392B',
+  },
+  netNoExpenses: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    fontSize: 12,
+    color: '#AAAAAA',
+    fontStyle: 'italic',
+    lineHeight: 17,
+  },
+
   // Credit book: money owed to the shop. Orange, because it is money the
   // owner has earned but does not have.
   creditCard: {

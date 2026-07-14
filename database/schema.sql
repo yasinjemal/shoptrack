@@ -156,6 +156,39 @@ CREATE INDEX idx_credit_date ON credit_entries(recorded_at);
 
 
 -- ============================================
+-- TABLE: expenses
+-- ============================================
+-- What the shop pays out to stay open: rent, electricity, transport, wages,
+-- airtime.
+--
+-- WHY: calculations.ts produces GROSS profit (revenue - cost of goods sold).
+-- An owner who sees "R2,400 profit" but paid R500 rent did not make R2,400.
+-- Net profit = gross - expenses, and net is the number they actually want.
+--
+-- ⚠️  STOCK PURCHASES DO NOT BELONG HERE.
+-- Buying stock is already the cost side of gross profit: every unit sold is
+-- valued at its buy_price. Recording a delivery here as well would charge the
+-- owner twice for the same goods and invent a loss. Deliveries go through
+-- Stock In (stock_movements). The category CHECK enforces this -- there is
+-- deliberately no 'STOCK' option, and a test asserts it stays that way.
+--
+-- Categories are a fixed list rather than free text, or every shop invents its
+-- own spelling of "electricity" and totals-by-category become meaningless.
+
+CREATE TABLE expenses (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    category     TEXT NOT NULL CHECK (category IN
+                   ('RENT', 'ELECTRICITY', 'TRANSPORT', 'WAGES', 'AIRTIME', 'OTHER')),
+    amount       REAL NOT NULL CHECK (amount > 0),
+    notes        TEXT,                              -- "Taxi to cash and carry"
+    recorded_at  INTEGER NOT NULL                   -- Unix timestamp (ms)
+);
+
+CREATE INDEX idx_expenses_date ON expenses(recorded_at);
+CREATE INDEX idx_expenses_category ON expenses(category);
+
+
+-- ============================================
 -- NOT YET IMPLEMENTED
 -- ============================================
 -- Earlier drafts of this file defined period_snapshots, product_period_metrics

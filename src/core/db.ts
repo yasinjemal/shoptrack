@@ -12,6 +12,7 @@
 import type { SQLiteDatabase } from 'expo-sqlite';
 import type { Product as CoreProduct, StockMovement } from './calculations';
 import type { CreditEntry, Customer } from './credit';
+import type { Expense, ExpenseCategory } from './expenses';
 
 /**
  * The product shape the UI works with.
@@ -254,4 +255,80 @@ export async function deactivateCustomer(
     'UPDATE customers SET is_active = 0, updated_at = ? WHERE id = ?',
     [now, customerId]
   );
+}
+
+// ============================================
+// EXPENSES
+// ============================================
+
+interface ExpenseRow {
+  id: number;
+  category: ExpenseCategory;
+  amount: number;
+  notes: string | null;
+  recorded_at: number;
+}
+
+/**
+ * Load expenses, newest first.
+ *
+ * Pass `since` to bound the scan. Unlike credit, there is no carry-over to
+ * worry about: an expense belongs to the period it was paid in and nothing
+ * before that window affects it.
+ */
+export async function loadExpenses(
+  db: SQLiteDatabase,
+  since?: number
+): Promise<Expense[]> {
+  const rows = since != null
+    ? await db.getAllAsync<ExpenseRow>(
+        `SELECT id, category, amount, notes, recorded_at FROM expenses
+         WHERE recorded_at >= ? ORDER BY recorded_at DESC`,
+        [since]
+      )
+    : await db.getAllAsync<ExpenseRow>(
+        `SELECT id, category, amount, notes, recorded_at FROM expenses
+         ORDER BY recorded_at DESC`
+      );
+
+  return rows.map(r => ({
+    id: r.id,
+    category: r.category,
+    amount: r.amount,
+    notes: r.notes ?? undefined,
+    recorded_at: r.recorded_at,
+  }));
+}
+
+/**
+ * Record a running cost.
+ *
+ * Deliberately has no way to record a stock purchase -- those go through
+ * recordStockIn, because they are already the cost side of gross profit.
+ */
+export async function recordExpense(
+  db: SQLiteDatabase,
+  category: ExpenseCategory,
+  amount: number,
+  notes: string | null = null,
+  now: number = Date.now()
+): Promise<number> {
+  const result = await db.runAsync(
+    `INSERT INTO expenses (category, amount, notes, recorded_at) VALUES (?, ?, ?, ?)`,
+    [category, amount, notes?.trim() || null, now]
+  );
+  return result.lastInsertRowId;
+}
+
+/**
+ * Remove an expense outright.
+ *
+ * Unlike the credit ledger, this is a real delete. A credit entry is a claim
+ * against another person, so its history matters and corrections are made by
+ * adding an opposite entry. An expense is just the owner's own record of what
+ * they paid; a typo there is noise, and leaving a reversal pair in the list
+ * would make the screen harder to read than the mistake it fixes.
+ */
+export async function deleteExpense(db: SQLiteDatabase, expenseId: number): Promise<void> {
+  await db.runAsync('DELETE FROM expenses WHERE id = ?', [expenseId]);
 }

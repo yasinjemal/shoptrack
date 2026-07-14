@@ -43,15 +43,23 @@ import {
   summariseOutstanding,
   type CreditSummary,
 } from './src/core/credit';
-import { loadCreditEntries, loadCustomers } from './src/core/db';
+import {
+  calculateExpenseSummary,
+  calculateNetProfit,
+  type ExpenseCategory,
+  type ExpenseSummary,
+  type NetProfit,
+} from './src/core/expenses';
+import { loadCreditEntries, loadCustomers, loadExpenses } from './src/core/db';
 import { styles } from './src/ui/styles';
 import { CreditScreen } from './src/ui/credit/CreditScreen';
+import { ExpensesScreen } from './src/ui/expenses/ExpensesScreen';
 
 // ============================================
 // DATABASE SETUP
 // ============================================
 
-const db = SQLite.openDatabaseSync('shoptrack.db');
+let db: SQLite.SQLiteDatabase;
 
 // ============================================
 // TYPES
@@ -61,7 +69,7 @@ const db = SQLite.openDatabaseSync('shoptrack.db');
 // screens cannot drift apart again.
 type Product = AppProduct;
 
-type Screen = 'home' | 'products' | 'add_product' | 'edit_product' | 'count' | 'stock_in' | 'activity' | 'weekly' | 'credit';
+type Screen = 'home' | 'products' | 'add_product' | 'edit_product' | 'count' | 'stock_in' | 'activity' | 'weekly' | 'credit' | 'expenses';
 
 type Language = 'en' | 'zu';
 
@@ -174,6 +182,41 @@ const STRINGS = {
     // Shown next to profit, never subtracted from it (see src/core/credit.ts)
     CREDIT_NOT_IN_HAND: (amount: string) => `${amount} of this is still owed to you.`,
 
+    // Expenses
+    EXPENSES_TITLE: "Expenses",
+    EXPENSES_HOME_BUTTON: "Expenses",
+    EXPENSES_HOME_HINT: "What you pay out",
+    EXPENSES_EMPTY: "No expenses yet",
+    EXPENSES_EMPTY_HINT: "Rent, electricity, transport, wages. Add them here so your profit is the real number.",
+    EXPENSES_MONTH_LABEL: "Paid out this month",
+    EXPENSES_ADD: "Add Expense",
+    EXPENSES_AMOUNT: "How much?",
+    EXPENSES_CATEGORY: "What was it for?",
+    EXPENSES_NOTE: "Note",
+    EXPENSES_NOTE_HINT: "Taxi to cash and carry",
+    EXPENSES_SAVE: "Save",
+    EXPENSES_SAVING: "Saving...",
+    EXPENSES_NOT_STOCK: "Don't add stock you bought here — use Add Stock for that, or it gets counted twice.",
+    EXPENSES_DELETE_CONFIRM: "Remove this expense?",
+    EXPENSES_DELETE_CONFIRM_HINT: "It will be taken off your totals.",
+    EXPENSES_DELETE: "Remove",
+    EXPENSES_CANCEL: "Cancel",
+    CATEGORY_LABEL: (c: ExpenseCategory) => ({
+      RENT: 'Rent',
+      ELECTRICITY: 'Electricity',
+      TRANSPORT: 'Transport',
+      WAGES: 'Wages',
+      AIRTIME: 'Airtime & data',
+      OTHER: 'Other',
+    })[c],
+
+    // Net profit (gross - expenses)
+    NET_FROM_SALES: "From sales:",
+    NET_EXPENSES: "Costs:",
+    NET_KEPT: "You kept:",
+    NET_LOSS: "You are short:",
+    NET_NO_EXPENSES: "No expenses recorded, so this is before rent and costs.",
+
     // Language
     LANGUAGE_LABEL: "Language",
   },
@@ -280,6 +323,41 @@ const STRINGS = {
     CREDIT_OWES_YOU_CHANGE: "Ubakweleta ushintshi",
     CREDIT_NOT_IN_HAND: (amount: string) => `${amount} kulokhu usakukweletwa.`,
 
+    // Expenses
+    EXPENSES_TITLE: "Izindleko",
+    EXPENSES_HOME_BUTTON: "Izindleko",
+    EXPENSES_HOME_HINT: "Okukhokhayo",
+    EXPENSES_EMPTY: "Azikho izindleko okwamanje",
+    EXPENSES_EMPTY_HINT: "Irenti, ugesi, ezokuthutha, amaholo. Kufake lapha ukuze inzuzo yakho ibe yiqiniso.",
+    EXPENSES_MONTH_LABEL: "Okukhokhiwe kule nyanga",
+    EXPENSES_ADD: "Engeza Indleko",
+    EXPENSES_AMOUNT: "Malini?",
+    EXPENSES_CATEGORY: "Bekungokwani?",
+    EXPENSES_NOTE: "Inothi",
+    EXPENSES_NOTE_HINT: "Itekisi eya ku-cash and carry",
+    EXPENSES_SAVE: "Gcina",
+    EXPENSES_SAVING: "Iyagcina...",
+    EXPENSES_NOT_STOCK: "Ungafaki lapha isitoko osithengile — sebenzisa u-Engeza Isitoko, ngaphandle kwalokho kubalwa kabili.",
+    EXPENSES_DELETE_CONFIRM: "Susa le ndleko?",
+    EXPENSES_DELETE_CONFIRM_HINT: "Izokhishwa kwizibalo zakho.",
+    EXPENSES_DELETE: "Susa",
+    EXPENSES_CANCEL: "Khansela",
+    CATEGORY_LABEL: (c: ExpenseCategory) => ({
+      RENT: 'Irenti',
+      ELECTRICITY: 'Ugesi',
+      TRANSPORT: 'Ezokuthutha',
+      WAGES: 'Amaholo',
+      AIRTIME: 'I-airtime ne-data',
+      OTHER: 'Okunye',
+    })[c],
+
+    // Net profit (gross - expenses)
+    NET_FROM_SALES: "Kokuthengisiwe:",
+    NET_EXPENSES: "Izindleko:",
+    NET_KEPT: "Osele nakho:",
+    NET_LOSS: "Okushodayo:",
+    NET_NO_EXPENSES: "Azikho izindleko ezifakiwe, ngakho lokhu kungaphambi kwerenti nezinye izindleko.",
+
     // Language
     LANGUAGE_LABEL: "Ulimi",
   },
@@ -313,6 +391,7 @@ export default function App() {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [productSearch, setProductSearch] = useState('');
   const [credit, setCredit] = useState<CreditSummary | null>(null);
+  const [expenses, setExpenses] = useState<ExpenseSummary | null>(null);
   const strings = t(lang);
 
   // Initialize database and language on mount
@@ -325,9 +404,11 @@ export default function App() {
           setLang(savedLang);
         }
         
+        db = SQLite.openDatabaseSync('shoptrack.db');
         await initDatabase(db);
         await refreshProducts();
         await refreshCredit();
+        await refreshExpenses();
       } catch (error) {
         console.error('Database init error:', error);
         Alert.alert('Error', 'Could not initialize database');
@@ -344,6 +425,20 @@ export default function App() {
     setLang(newLang);
     await AsyncStorage.setItem('shoptrack_language', newLang);
   };
+
+  // Load this month's expenses for the Home summary.
+  //
+  // Scoped to the month because rent and electricity arrive monthly; a weekly
+  // window would show a spike one week and nothing the next.
+  const refreshExpenses = useCallback(async () => {
+    try {
+      const month = getPeriodBounds('this_month');
+      const rows = await loadExpenses(db, month.start);
+      setExpenses(calculateExpenseSummary(rows, month.start, month.end));
+    } catch (error) {
+      console.error('Load expenses error:', error);
+    }
+  }, []);
 
   // Load the credit book for the Home summary
   const refreshCredit = useCallback(async () => {
@@ -737,6 +832,15 @@ export default function App() {
                 <Text style={styles.secondaryActionText}>{strings.CREDIT_HOME_BUTTON}</Text>
                 <Text style={styles.secondaryActionHint}>{strings.CREDIT_HOME_HINT}</Text>
               </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.secondaryAction}
+                onPress={() => setScreen('expenses')}
+              >
+                <Text style={styles.secondaryActionIcon}>🧾</Text>
+                <Text style={styles.secondaryActionText}>{strings.EXPENSES_HOME_BUTTON}</Text>
+                <Text style={styles.secondaryActionHint}>{strings.EXPENSES_HOME_HINT}</Text>
+              </TouchableOpacity>
             </View>
             
             {/* Activity buttons - only show if there's history */}
@@ -933,6 +1037,20 @@ export default function App() {
         strings={strings}
         onBack={() => setScreen('home')}
         onChanged={refreshCredit}
+      />
+    );
+  }
+
+  // ==========================================
+  // SCREEN: Expenses
+  // ==========================================
+  if (screen === 'expenses') {
+    return (
+      <ExpensesScreen
+        db={db}
+        strings={strings}
+        onBack={() => setScreen('home')}
+        onChanged={refreshExpenses}
       />
     );
   }
@@ -1838,7 +1956,8 @@ interface SalesBreakdownItem {
 }
 
 interface WeeklySummary {
-  totalProfit: number;
+  totalProfit: number;      // Gross: revenue - cost of goods sold
+  net: NetProfit;           // Gross minus expenses recorded this week
   topProduct: { name: string; profit: number } | null;
   lastWeekProfit: number | null;
   isFirstWeek: boolean;
@@ -1944,6 +2063,16 @@ function WeeklySummaryScreen({
         sellingMetrics.map(m => [m.product_id, m])
       );
 
+      // Net profit for the same window. Expenses are cash-basis: they land in
+      // the week they were paid. A month's rent paid on Monday therefore hits
+      // that week in full, which is what actually happened to the till.
+      const weekExpenses = calculateExpenseSummary(
+        await loadExpenses(db, thisWeek.start),
+        thisWeek.start,
+        thisWeek.end
+      );
+      const net = calculateNetProfit(totalProfit, weekExpenses.total);
+
       // Tier 4.2: Calculate slow-moving stock (money tied up)
       const slowStockItems: SlowStockItem[] = [];
       let slowStockValue = 0;
@@ -1994,6 +2123,7 @@ function WeeklySummaryScreen({
 
       setSummary({
         totalProfit,
+        net,
         topProduct: topProduct
           ? { name: topProduct.product_name, profit: topProduct.estimated_profit }
           : null,
@@ -2095,6 +2225,33 @@ function WeeklySummaryScreen({
             {getConfidenceLabel()}
           </Text>
         </View>
+
+        {/* Net profit: what the sales figure leaves once costs are paid.
+            Shown only once expenses exist, otherwise it would just repeat the
+            gross number and imply the owner keeps all of it. */}
+        {summary.net.has_expense_data ? (
+          <View style={styles.netCard}>
+            <View style={styles.netRow}>
+              <Text style={styles.netRowLabel}>{strings.NET_FROM_SALES}</Text>
+              <Text style={styles.netRowValue}>R{summary.net.gross_profit.toFixed(2)}</Text>
+            </View>
+            <View style={styles.netRow}>
+              <Text style={styles.netRowLabel}>{strings.NET_EXPENSES}</Text>
+              <Text style={styles.netRowCost}>−R{summary.net.expenses.toFixed(2)}</Text>
+            </View>
+            <View style={styles.netDivider} />
+            <View style={styles.netRow}>
+              <Text style={styles.netKeptLabel}>
+                {summary.net.is_loss ? strings.NET_LOSS : strings.NET_KEPT}
+              </Text>
+              <Text style={[styles.netKeptValue, summary.net.is_loss && styles.netKeptLoss]}>
+                R{Math.abs(summary.net.net_profit).toFixed(2)}
+              </Text>
+            </View>
+          </View>
+        ) : (
+          <Text style={styles.netNoExpenses}>{strings.NET_NO_EXPENSES}</Text>
+        )}
 
         {/* Top product */}
         {summary.topProduct && (

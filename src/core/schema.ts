@@ -26,7 +26,7 @@ export interface MigrationDb {
  * Bump this whenever the table shape changes. While ALLOW_DESTRUCTIVE_RESET is
  * on, bumping it is all you need to do -- the app rebuilds itself on next boot.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /**
  * ⚠️  PRE-RELEASE ONLY. THIS ERASES THE DATABASE.
@@ -40,6 +40,9 @@ export const SCHEMA_VERSION = 2;
  * Leaving it true once a shop has counted real stock means their books are
  * destroyed by an app update. With it false, a version mismatch throws instead,
  * which forces a real migration to be written -- the failure you want.
+ *
+ * See docs/BEFORE-PILOT.md, tripwire 1. It also records the SQLite table-rebuild
+ * gotchas you will need the day you write that first migration.
  */
 const ALLOW_DESTRUCTIVE_RESET = true;
 
@@ -125,6 +128,29 @@ const CREATE_CREDIT_ENTRIES = `
   );
 `;
 
+/**
+ * Running costs: rent, electricity, transport, wages, airtime.
+ *
+ * ⚠️  STOCK PURCHASES DO NOT BELONG HERE.
+ *
+ * Buying stock is already the cost side of profit -- calculations.ts values
+ * every unit sold at its buy_price. Recording a delivery as an expense too
+ * would charge the owner for the same stock twice and turn a healthy shop
+ * into a fake loss. Deliveries go through Stock In (stock_movements).
+ *
+ * The category CHECK is the guard: there is deliberately no 'STOCK' option.
+ */
+const CREATE_EXPENSES = `
+  CREATE TABLE IF NOT EXISTS expenses (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    category     TEXT NOT NULL CHECK (category IN
+                   ('RENT', 'ELECTRICITY', 'TRANSPORT', 'WAGES', 'AIRTIME', 'OTHER')),
+    amount       REAL NOT NULL CHECK (amount > 0),
+    notes        TEXT,
+    recorded_at  INTEGER NOT NULL
+  );
+`;
+
 const CREATE_INDEXES = `
   CREATE INDEX IF NOT EXISTS idx_products_active ON products(is_active);
   CREATE INDEX IF NOT EXISTS idx_movements_product ON stock_movements(product_id);
@@ -134,11 +160,14 @@ const CREATE_INDEXES = `
   CREATE INDEX IF NOT EXISTS idx_customers_active ON customers(is_active);
   CREATE INDEX IF NOT EXISTS idx_credit_customer ON credit_entries(customer_id);
   CREATE INDEX IF NOT EXISTS idx_credit_date ON credit_entries(recorded_at);
+  CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(recorded_at);
+  CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category);
 `;
 
 
 // Children before parents, so foreign keys never block the drop.
 const DROP_ALL = `
+  DROP TABLE IF EXISTS expenses;
   DROP TABLE IF EXISTS credit_entries;
   DROP TABLE IF EXISTS customers;
   DROP TABLE IF EXISTS stock_movements;
@@ -183,6 +212,7 @@ export async function initDatabase(db: MigrationDb) {
   await db.execAsync(CREATE_SESSIONS);
   await db.execAsync(CREATE_CUSTOMERS);
   await db.execAsync(CREATE_CREDIT_ENTRIES);
+  await db.execAsync(CREATE_EXPENSES);
   await db.execAsync(CREATE_INDEXES);
   await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
 }

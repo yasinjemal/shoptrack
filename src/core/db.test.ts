@@ -21,18 +21,22 @@ import { initDatabase, type MigrationDb } from './schema';
 import {
   addCustomer,
   deactivateCustomer,
+  deleteExpense,
   loadCreditEntries,
   loadCustomers,
+  loadExpenses,
   loadMovements,
   loadProducts,
   recordCount,
   recordCreditEntry,
+  recordExpense,
   recordStockIn,
   toCoreProduct,
   type AppProduct,
 } from './db';
 import { calculateCreditSummary } from './credit';
 import { calculatePeriodSummary } from './calculations';
+import { calculateExpenseSummary, calculateNetProfit } from './expenses';
 
 let failures = 0;
 
@@ -200,6 +204,51 @@ async function run() {
 
   console.log('');
   console.log('========================================');
+  console.log('TEST: expenses through real SQL, and net profit');
+  console.log('========================================');
+
+  await recordExpense(db, 'RENT', 1500, 'February', MONDAY);
+  await recordExpense(db, 'TRANSPORT', 200, 'Taxi to cash and carry', MONDAY + DAY);
+  const strayId = await recordExpense(db, 'OTHER', 75, 'typo', MONDAY + 2 * DAY);
+
+  const expenses = await loadExpenses(db);
+  equal(expenses.length, 3, 'all expenses are stored');
+  equal(expenses[0].notes, 'typo', 'expenses come back newest first');
+  equal(expenses[2].category, 'RENT', 'category round-trips');
+  equal(expenses[2].amount, 1500, 'amount round-trips');
+
+  await deleteExpense(db, strayId);
+  equal((await loadExpenses(db)).length, 2, 'a mistaken expense can be removed');
+
+  const expenseSummary = calculateExpenseSummary(
+    await loadExpenses(db),
+    MONDAY,
+    MONDAY + 7 * DAY
+  );
+  equal(expenseSummary.total, 1700, 'expense total from real rows');
+  equal(expenseSummary.biggest?.category, 'RENT', 'rent is the biggest cost');
+
+  // The whole point: gross profit was R120 from the stock above, but the shop
+  // paid R1,700 to stay open. It did not make money this week.
+  const realProfit = calculateNetProfit(summary.total_estimated_profit, expenseSummary.total);
+  equal(realProfit.gross_profit, 120, 'gross comes from the stock engine');
+  equal(realProfit.net_profit, -1580, 'net profit is gross minus expenses');
+  equal(realProfit.is_loss, true, 'the shop is flagged as losing money');
+
+  // Stock purchases must never appear as an expense: the R280 delivery above
+  // is already priced into gross profit via buy_price.
+  const sqlRejectsStock = await (async () => {
+    try {
+      await recordExpense(db, 'STOCK' as any, 280, null, MONDAY);
+      return false;
+    } catch {
+      return true;
+    }
+  })();
+  check(sqlRejectsStock, 'the database refuses a STOCK expense, so deliveries cannot double-count');
+
+  console.log('');
+  console.log('========================================');
   console.log('TEST: an empty shop does not crash');
   console.log('========================================');
 
@@ -208,9 +257,13 @@ async function run() {
   equal((await loadMovements(emptyDb)).length, 0, 'no movements');
   equal((await loadCustomers(emptyDb)).length, 0, 'no customers');
   equal((await loadCreditEntries(emptyDb)).length, 0, 'no credit entries');
+  equal((await loadExpenses(emptyDb)).length, 0, 'no expenses');
 
   const emptyBook = calculateCreditSummary([], [], MONDAY, MONDAY + 7 * DAY, MONDAY);
   equal(emptyBook.total_outstanding, 0, 'an empty book is zero, not NaN');
+
+  const emptyExpenses = calculateExpenseSummary([], MONDAY, MONDAY + 7 * DAY);
+  equal(emptyExpenses.total, 0, 'an empty expense list is zero, not NaN');
 
   console.log('');
   if (failures > 0) {
