@@ -243,6 +243,56 @@ CREATE INDEX idx_cash_ups_date ON cash_ups(recorded_at);
 
 
 -- ============================================
+-- TABLE: sales_entries
+-- ============================================
+-- The owner's own book: what the till took, and roughly what they keep of it.
+--
+-- WHY, ALONGSIDE stock_movements: counting stock needs two counts before it
+-- says anything, and says nothing at all about the years before the app was
+-- installed. Most owners already know they took R1,400 on Tuesday -- they just
+-- don't know what it earned. profit = takings x margin% answers that today, and
+-- answers it for January.
+--
+-- ⚠️  THIS IS A SECOND ESTIMATE OF THE SAME MONEY, NEVER AN EXTRA PILE OF IT.
+-- Counted profit and book profit both answer "did I make money?". Adding them
+-- counts one week of trading twice. src/core/sales.ts keeps them apart and the
+-- screens show them as separate lenses. Where they disagree, THAT is the
+-- interesting number: shrinkage, or a bad margin guess.
+--
+-- GRANULARITY
+--   'DAY'   -> one day's takings, going forward.
+--   'MONTH' -> one month's total, typed from an old paper book. Nobody keys in
+--              180 individual days.
+-- A month is either detailed (days) or summarised (one total), never both, or
+-- the same trading is counted twice. UNIQUE(period, period_key) stops duplicate
+-- rows; sales.ts reports a day/month clash rather than silently picking one.
+--
+-- period_key is TEXT, not a timestamp, on purpose. Everything else here is unix
+-- ms because it marks an instant. A calendar month is not an instant -- it is a
+-- label the owner recognises ("January") -- and storing it as a timestamp lets
+-- timezone drift move takings into the wrong month.
+--   DAY   -> 'YYYY-MM-DD'
+--   MONTH -> 'YYYY-MM'
+--
+-- margin_pct is snapshotted per entry, like buy_price_at_time on a delivery.
+-- Margins change; last year's profit must not move because bread was repriced
+-- today.
+
+CREATE TABLE sales_entries (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    period       TEXT NOT NULL CHECK (period IN ('DAY', 'MONTH')),
+    period_key   TEXT NOT NULL,                    -- 'YYYY-MM-DD' or 'YYYY-MM'
+    amount       REAL NOT NULL CHECK (amount >= 0), -- Gross takings. 0 = shop was closed.
+    margin_pct   REAL NOT NULL CHECK (margin_pct >= 0 AND margin_pct <= 100),
+    notes        TEXT,
+    recorded_at  INTEGER NOT NULL,                 -- Unix timestamp (ms)
+    UNIQUE (period, period_key)
+);
+
+CREATE INDEX idx_sales_period ON sales_entries(period, period_key);
+
+
+-- ============================================
 -- NOT YET IMPLEMENTED
 -- ============================================
 -- Earlier drafts of this file defined period_snapshots, product_period_metrics

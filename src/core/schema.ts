@@ -26,7 +26,7 @@ export interface MigrationDb {
  * Bump this whenever the table shape changes. Every bump after the first pilot
  * build must add a migration below; shop data is never reset to change shape.
  */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 const CREATE_PRODUCTS = `
   CREATE TABLE IF NOT EXISTS products (
@@ -168,6 +168,59 @@ const CREATE_CASH_UPS = `
   );
 `;
 
+/**
+ * The owner's own sales book: what the till took, and roughly what they keep.
+ *
+ * WHY THIS EXISTS ALONGSIDE stock_movements
+ * -----------------------------------------
+ * Counting stock infers sales, and needs two counts before it says anything.
+ * A shop owner who has kept a paper book for years already knows what they took
+ * every day -- they just don't know what it earned. This lets them type what
+ * they already have and get an answer immediately, including for months before
+ * they ever installed the app.
+ *
+ * ⚠️  THIS IS A SECOND ESTIMATE OF THE SAME THING, NEVER AN EXTRA ONE.
+ *
+ * Counted profit and sales-book profit are two ways of answering "did I make
+ * money?". They must never be added together, or one week of trading is
+ * counted twice. src/core/sales.ts keeps them apart and the screens show them
+ * as separate lenses.
+ *
+ * GRANULARITY
+ * -----------
+ * period = 'DAY'   -> one day's takings, going forward.
+ * period = 'MONTH' -> one month's total, typed from an old paper book. Nobody
+ *                     is going to key in 180 individual days.
+ *
+ * A month is either detailed (days) or summarised (one total) -- never both, or
+ * the same trading is counted twice. UNIQUE(period, period_key) stops duplicate
+ * rows; sales.ts detects and reports a day/month clash rather than silently
+ * picking one.
+ *
+ * period_key is TEXT, not a timestamp, on purpose. Everything else in this
+ * schema is unix ms because it marks an instant. A calendar month is not an
+ * instant -- it is a label the owner recognises ("January") -- and storing it as
+ * a timestamp invites timezone drift to move takings into the wrong month.
+ *   DAY   -> 'YYYY-MM-DD'
+ *   MONTH -> 'YYYY-MM'
+ *
+ * margin_pct is snapshotted per entry, like buy_price_at_time on a delivery.
+ * Margins change; last year's profit should not move because the owner reprices
+ * bread today.
+ */
+const CREATE_SALES_ENTRIES = `
+  CREATE TABLE IF NOT EXISTS sales_entries (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    period       TEXT NOT NULL CHECK (period IN ('DAY', 'MONTH')),
+    period_key   TEXT NOT NULL,
+    amount       REAL NOT NULL CHECK (amount >= 0),
+    margin_pct   REAL NOT NULL CHECK (margin_pct >= 0 AND margin_pct <= 100),
+    notes        TEXT,
+    recorded_at  INTEGER NOT NULL,
+    UNIQUE (period, period_key)
+  );
+`;
+
 const CREATE_INDEXES = `
   CREATE INDEX IF NOT EXISTS idx_products_active ON products(is_active);
   CREATE INDEX IF NOT EXISTS idx_movements_product ON stock_movements(product_id);
@@ -180,13 +233,14 @@ const CREATE_INDEXES = `
   CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(recorded_at);
   CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category);
   CREATE INDEX IF NOT EXISTS idx_cash_ups_date ON cash_ups(recorded_at);
+  CREATE INDEX IF NOT EXISTS idx_sales_period ON sales_entries(period, period_key);
 `;
 
 
 /**
  * Upgrade a database created by an earlier committed ShopTrack schema.
  *
- * Versions 2→3 and 3→4 only added tables. Version 4→5 added the nullable
+ * Versions 2→3, 3→4 and 5→6 only added tables. Version 4→5 added the nullable
  * due_at column. They are intentionally small, additive migrations: all rows
  * remain in place and a partially completed v4→5 step can safely resume.
  */
@@ -227,6 +281,14 @@ async function migrateDatabase(db: MigrationDb, fromVersion: number): Promise<vo
     version = 5;
   }
 
+  if (version === 5) {
+    await db.withTransactionAsync(async () => {
+      await db.execAsync(CREATE_SALES_ENTRIES);
+      await db.execAsync('PRAGMA user_version = 6;');
+    });
+    version = 6;
+  }
+
   if (version !== SCHEMA_VERSION) {
     throw new Error(`No migration path from schema v${fromVersion} to v${SCHEMA_VERSION}.`);
   }
@@ -262,6 +324,7 @@ export async function initDatabase(db: MigrationDb) {
   await db.execAsync(CREATE_CREDIT_ENTRIES);
   await db.execAsync(CREATE_EXPENSES);
   await db.execAsync(CREATE_CASH_UPS);
+  await db.execAsync(CREATE_SALES_ENTRIES);
   await db.execAsync(CREATE_INDEXES);
   await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
 }

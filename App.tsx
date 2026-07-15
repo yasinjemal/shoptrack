@@ -70,13 +70,16 @@ import {
   loadCreditEntries,
   loadCustomers,
   loadExpenses,
+  loadSalesEntries,
   type CashUp,
 } from './src/core/db';
 import { styles } from './src/ui/styles';
 import { color, motion } from './src/ui/theme';
+import { calculateSalesHistory, summariseSalesBook, type SalesHistory } from './src/core/sales';
 import { CreditScreen } from './src/ui/credit/CreditScreen';
 import { ExpensesScreen } from './src/ui/expenses/ExpensesScreen';
 import { CashUpScreen } from './src/ui/cashup/CashUpScreen';
+import { SalesScreen } from './src/ui/sales/SalesScreen';
 
 // ============================================
 // DATABASE SETUP
@@ -106,7 +109,7 @@ let db: SQLite.SQLiteDatabase;
 // screens cannot drift apart again.
 type Product = AppProduct;
 
-type Screen = 'home' | 'products' | 'add_product' | 'edit_product' | 'count' | 'stock_in' | 'activity' | 'weekly' | 'credit' | 'expenses' | 'cashup';
+type Screen = 'home' | 'products' | 'add_product' | 'edit_product' | 'count' | 'stock_in' | 'activity' | 'weekly' | 'credit' | 'expenses' | 'cashup' | 'sales';
 
 type Language = 'en' | 'zu';
 
@@ -291,6 +294,33 @@ const STRINGS = {
     CASHUP_TITLE: "Cash Up",
     CASHUP_HOME_BUTTON: "Cash Up",
     CASHUP_HOME_HINT: "Count your till",
+
+    // Sales book
+    SALES_TITLE: "Sales Book",
+    SALES_HOME_BUTTON: "Sales Book",
+    SALES_HOME_HINT: "What you took",
+    SALES_EMPTY: "No sales written down yet",
+    SALES_EMPTY_HINT: "Keep a book of what you take each day? Write it here and ShopTrack works out what you made — even for months before you got the app.",
+    SALES_TOTAL_LABEL: "Profit so far",
+    SALES_TOTAL_HINT: (months: number, margin: string) =>
+      `From ${months} ${months === 1 ? 'month' : 'months'}, keeping about ${margin}`,
+    SALES_TODAY: "Today's sales",
+    SALES_BACKFILL: "Add a past month",
+    SALES_TOOK_TODAY: "How much did you take today?",
+    SALES_TOOK_MONTH: (month: string) => `How much did you take in ${month}?`,
+    SALES_MARGIN: "How much of that do you keep?",
+    SALES_MARGIN_HINT: "Out of every R100 you take, how much is yours after paying for the stock? Most shops keep R20–R30.",
+    SALES_MARGIN_IS_YOURS: "This is your own estimate, so the profit is an estimate too. Count your stock for the exact number.",
+    SALES_WILL_KEEP: (amount: string) => `You kept about ${amount}`,
+    SALES_PICK_MONTH: "Which month?",
+    SALES_SAVE: "Save",
+    SALES_SAVING: "Saving...",
+    SALES_CANCEL: "Cancel",
+    SALES_MONTH_DAYS: (days: number) => `${days} ${days === 1 ? 'day' : 'days'} written down`,
+    SALES_MONTH_TOTAL: "whole month",
+    SALES_CONFLICT: "One month is written down twice",
+    SALES_CONFLICT_FIX: "tap to keep the daily entries",
+    SALES_NOT_COUNTED_PROFIT: "This is from your own book. Counting stock gives its own profit — the two answer the same question in different ways, so don't add them together.",
     CASHUP_FIRST_TITLE: "Starting Cash",
     CASHUP_FIRST_HINT: "This is your starting point. Next time you cash up, we'll compare against this.",
     CASHUP_QUESTION: "How much cash is in your till?",
@@ -608,6 +638,33 @@ const STRINGS = {
     CASHUP_TITLE: "Bala Imali",
     CASHUP_HOME_BUTTON: "Bala Imali",
     CASHUP_HOME_HINT: "Bala imali yakho",
+
+    // Sales book
+    SALES_TITLE: "Incwadi Yokuthengisa",
+    SALES_HOME_BUTTON: "Okuthengisiwe",
+    SALES_HOME_HINT: "Okutholile",
+    SALES_EMPTY: "Akukho okuthengisiwe okubhaliwe",
+    SALES_EMPTY_HINT: "Ugcina incwadi yalokho okutholayo nsuku zonke? Kubhale lapha bese i-ShopTrack ibala ukuthi wenzeni — ngisho nangezinyanga ngaphambi kokuthola uhlelo.",
+    SALES_TOTAL_LABEL: "Inzuzo kuze kube manje",
+    SALES_TOTAL_HINT: (months: number, margin: string) =>
+      `Ezinyangeni ezingu-${months}, ugcina cishe u-${margin}`,
+    SALES_TODAY: "Okuthengisiwe namuhla",
+    SALES_BACKFILL: "Engeza inyanga edlule",
+    SALES_TOOK_TODAY: "Utholé malini namuhla?",
+    SALES_TOOK_MONTH: (month: string) => `Utholé malini ngo-${month}?`,
+    SALES_MARGIN: "Ugcina malini kulokho?",
+    SALES_MARGIN_HINT: "Kuwo wonke u-R100 owutholayo, malini engeyakho ngemva kokukhokhela isitoko? Izitolo eziningi zigcina u-R20–R30.",
+    SALES_MARGIN_IS_YOURS: "Lesi yisilinganiso sakho, ngakho inzuzo nayo iyisilinganiso. Bala isitoko sakho ukuze uthole inani eliqondile.",
+    SALES_WILL_KEEP: (amount: string) => `Ugcine cishe u-${amount}`,
+    SALES_PICK_MONTH: "Iyiphi inyanga?",
+    SALES_SAVE: "Gcina",
+    SALES_SAVING: "Iyagcina...",
+    SALES_CANCEL: "Khansela",
+    SALES_MONTH_DAYS: (days: number) => `izinsuku ezingu-${days} ezibhaliwe`,
+    SALES_MONTH_TOTAL: "inyanga yonke",
+    SALES_CONFLICT: "Inyanga eyodwa ibhalwe kabili",
+    SALES_CONFLICT_FIX: "thepha ukugcina okwansuku zonke",
+    SALES_NOT_COUNTED_PROFIT: "Lokhu kuvela encwadini yakho. Ukubala isitoko kunikeza inzuzo yakho — kokubili kuphendula umbuzo ofanayo ngezindlela ezahlukene, ngakho ungakuhlanganisi.",
     CASHUP_FIRST_TITLE: "Imali Yokuqala",
     CASHUP_FIRST_HINT: "Lena yindawo yakho yokuqala. Ngokuzayo uma ubala imali, sizoqhathanisa nalokhu.",
     CASHUP_QUESTION: "Imalini esesikhwameni sakho?",
@@ -784,6 +841,7 @@ export default function App() {
   const [credit, setCredit] = useState<CreditSummary | null>(null);
   const [expenses, setExpenses] = useState<ExpenseSummary | null>(null);
   const [lastCashUp, setLastCashUp] = useState<CashUp | null>(null);
+  const [sales, setSales] = useState<SalesHistory | null>(null);
   const [dbError, setDbError] = useState<string | null>(null);
   const strings = t(lang);
 
@@ -826,6 +884,7 @@ export default function App() {
         await refreshCredit();
         await refreshExpenses();
         await refreshCashUp();
+        await refreshSales();
       } catch (error) {
         console.error('Database init error:', error);
         // Kept verbatim: "Sync operation timeout" means someone reintroduced a
@@ -845,6 +904,15 @@ export default function App() {
     setLang(newLang);
     await AsyncStorage.setItem('shoptrack_language', newLang);
   };
+
+  // The owner's own sales book, for the Home summary.
+  const refreshSales = useCallback(async () => {
+    try {
+      setSales(calculateSalesHistory(await loadSalesEntries(db)));
+    } catch (error) {
+      console.error('Load sales error:', error);
+    }
+  }, []);
 
   // The most recent till count, for the Home signal.
   const refreshCashUp = useCallback(async () => {
@@ -1234,6 +1302,26 @@ export default function App() {
             </TouchableOpacity>
           )}
 
+          {/* The owner's own book. Shown next to counted profit, never added to
+              it: both answer "did I make money?", so summing them counts the
+              same trading twice. See src/core/sales.ts. */}
+          {sales && summariseSalesBook(sales) && (
+            <Pressable
+              style={({ pressed }) => [styles.salesCard, pressed && styles.salesCardPressed]}
+              android_ripple={{ color: color.ripple }}
+              onPress={() => setScreen('sales')}
+            >
+              <Text style={styles.salesCardLabel}>{strings.SALES_TOTAL_LABEL}</Text>
+              <Text style={styles.salesCardAmount}>R{sales.total_profit.toFixed(2)}</Text>
+              <Text style={styles.salesCardHint}>
+                {strings.SALES_TOTAL_HINT(
+                  sales.months_recorded,
+                  `${sales.average_margin_pct.toFixed(0)}%`
+                )}
+              </Text>
+            </Pressable>
+          )}
+
           {/* Credit book: what's out in the community */}
           {credit && summariseOutstanding(credit) && (
             <TouchableOpacity
@@ -1352,6 +1440,16 @@ export default function App() {
                 <Text style={styles.secondaryActionIcon}>💰</Text>
                 <Text style={styles.secondaryActionText}>{strings.CASHUP_HOME_BUTTON}</Text>
                 <Text style={styles.secondaryActionHint}>{strings.CASHUP_HOME_HINT}</Text>
+              </Pressable>
+
+              <Pressable
+                style={({ pressed }) => [styles.secondaryAction, pressed && styles.secondaryActionPressed]}
+                android_ripple={{ color: color.ripple, borderless: false }}
+                onPress={() => setScreen('sales')}
+              >
+                <Text style={styles.secondaryActionIcon}>📗</Text>
+                <Text style={styles.secondaryActionText}>{strings.SALES_HOME_BUTTON}</Text>
+                <Text style={styles.secondaryActionHint}>{strings.SALES_HOME_HINT}</Text>
               </Pressable>
             </View>
             
@@ -1581,6 +1679,20 @@ export default function App() {
         strings={strings}
         onBack={() => setScreen('home')}
         onChanged={refreshExpenses}
+      />
+    );
+  }
+
+  // ==========================================
+  // SCREEN: Cash Up
+  // ==========================================
+  if (screen === 'sales') {
+    return (
+      <SalesScreen
+        db={db}
+        strings={strings}
+        onBack={() => setScreen('home')}
+        onChanged={refreshSales}
       />
     );
   }

@@ -261,6 +261,28 @@ Leave stock out of cash-up and every cash-up after a delivery reports a
 shortfall exactly the size of that delivery — sending the owner hunting a thief
 who is actually their supplier. A test asserts precisely this.
 
+### The sales book is never added to counted profit
+
+`src/core/sales.ts` and `src/core/calculations.ts`
+
+Home can show both "you made R750" (from stock counts) and "R60,850 profit
+across 6 months" (from the owner's book). Adding them, or showing one grand
+total, would count the same trading twice — they are two *estimates of the same
+money*, not two piles of it:
+
+- **Counted profit** — what the shelf says. Exact, but needs two counts.
+- **Book profit** — takings × the owner's own margin guess. Rough, but answers
+  for January.
+
+Where they disagree, that gap is the interesting number: shrinkage, a bad margin
+guess, or an unrecorded delivery. Reporting the disagreement is useful. Summing
+them is a lie. The screens keep them visually separate and the Sales Book says
+so in plain words.
+
+Related: a month is either detailed (days) or summarised (one total), never
+both. If both exist the days win and `has_conflict` is raised, because one of
+the two is wrong about the same month.
+
 ### A cash-up's `expected` is stored, not recalculated
 
 `cash_ups.expected_amount` / `difference`

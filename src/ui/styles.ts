@@ -222,6 +222,37 @@ export const styles = StyleSheet.create({
     lineHeight: 17,
   },
 
+  // The owner's own sales book. Green, because it is money they kept — but
+  // quieter than the profit card above it, which is the app's own answer.
+  salesCard: {
+    marginHorizontal: space.base,
+    marginTop: space.md,
+    backgroundColor: color.greenSoft,
+    borderWidth: 1,
+    borderColor: color.greenBorder,
+    padding: space.base,
+    borderRadius: radius.md,
+    alignItems: 'center',
+  },
+  salesCardPressed: {
+    backgroundColor: color.surfaceSunken,
+  },
+  salesCardLabel: {
+    ...type.caption,
+    color: color.inkSecondary,
+    marginBottom: space.xs,
+  },
+  salesCardAmount: {
+    ...type.amount,
+    color: color.greenInk,
+  },
+  salesCardHint: {
+    ...type.caption,
+    color: color.inkMuted,
+    marginTop: space.xs,
+    textAlign: 'center',
+  },
+
   // Credit book: money owed to the shop. Orange, because it is money the
   // owner has earned but does not have.
   creditCard: {

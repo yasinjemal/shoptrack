@@ -14,6 +14,7 @@ import type { Product as CoreProduct, StockMovement } from './calculations';
 import type { CreditEntry, Customer } from './credit';
 import type { Expense, ExpenseCategory } from './expenses';
 import type { CashUpResult } from './cashup';
+import type { SalesEntry, SalesPeriod } from './sales';
 import { SCHEMA_VERSION } from './schema';
 
 function requireNonNegativeInteger(value: number, label: string): void {
@@ -650,6 +651,91 @@ export function openingBalanceFrom(last: CashUp | null): number | null {
  * the owner actually handed over, including any part of a delivery not yet
  * priced per unit.
  */
+// ============================================
+// SALES BOOK
+// ============================================
+
+interface SalesEntryRow {
+  id: number;
+  period: SalesPeriod;
+  period_key: string;
+  amount: number;
+  margin_pct: number;
+  notes: string | null;
+  recorded_at: number;
+}
+
+/**
+ * The whole book.
+ *
+ * Deliberately unbounded: the point of this feature is the owner's history,
+ * and a shop with three years of monthly totals has 36 rows. Even five years of
+ * daily entries is under 2,000 -- nothing worth paginating on a phone.
+ */
+export async function loadSalesEntries(db: SQLiteDatabase): Promise<SalesEntry[]> {
+  const rows = await db.getAllAsync<SalesEntryRow>(
+    `SELECT id, period, period_key, amount, margin_pct, notes, recorded_at
+     FROM sales_entries ORDER BY period_key DESC`
+  );
+  return rows.map(r => ({
+    id: r.id,
+    period: r.period,
+    period_key: r.period_key,
+    amount: r.amount,
+    margin_pct: r.margin_pct,
+    notes: r.notes ?? undefined,
+    recorded_at: r.recorded_at,
+  }));
+}
+
+/**
+ * Record takings for a day or a month.
+ *
+ * Upserts on (period, period_key): re-entering Tuesday replaces Tuesday rather
+ * than adding a second Tuesday. An owner correcting a typo means "it was
+ * actually this much", not "I took this much again" -- and the UNIQUE
+ * constraint would reject the insert anyway.
+ *
+ * This is the opposite of the credit ledger, which is append-only. A debt is a
+ * claim whose history matters; a day's takings is a single fact that was either
+ * typed right or typed wrong.
+ */
+export async function recordSales(
+  db: SQLiteDatabase,
+  period: SalesPeriod,
+  periodKey: string,
+  amount: number,
+  marginPct: number,
+  notes: string | null = null,
+  now: number = Date.now()
+): Promise<void> {
+  await db.runAsync(
+    `INSERT INTO sales_entries (period, period_key, amount, margin_pct, notes, recorded_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT (period, period_key) DO UPDATE SET
+       amount = excluded.amount,
+       margin_pct = excluded.margin_pct,
+       notes = excluded.notes,
+       recorded_at = excluded.recorded_at`,
+    [period, periodKey, amount, marginPct, notes?.trim() || null, now]
+  );
+}
+
+export async function deleteSalesEntry(db: SQLiteDatabase, id: number): Promise<void> {
+  await db.runAsync('DELETE FROM sales_entries WHERE id = ?', [id]);
+}
+
+/**
+ * Clear a month's summary once the owner starts recording its days, so the two
+ * cannot describe the same trading at once.
+ */
+export async function clearMonthSummary(db: SQLiteDatabase, monthKey: string): Promise<void> {
+  await db.runAsync(
+    `DELETE FROM sales_entries WHERE period = 'MONTH' AND period_key = ?`,
+    [monthKey]
+  );
+}
+
 export async function stockPurchaseTotal(
   db: SQLiteDatabase,
   start: number,

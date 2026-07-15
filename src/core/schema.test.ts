@@ -71,6 +71,31 @@ function describe(d: DatabaseSync, table: string) {
     .join('\n');
 }
 
+/**
+ * Reconstruct an older schema from database/schema.sql by stripping what did
+ * not exist yet.
+ *
+ * Migrations are the one thing here that can destroy a shop's books, and they
+ * only ever run against a database built by an EARLIER build. Testing them
+ * against the current schema tests nothing: the tables the migration is meant
+ * to add are already there.
+ */
+function historicalSchema(
+  omit: { withoutDueAt?: boolean; withoutSalesEntries?: boolean }
+): string {
+  let sql = readFileSync(join(REPO_ROOT, 'database', 'schema.sql'), 'utf8');
+
+  if (omit.withoutDueAt) {
+    sql = sql.replace(/^\s*due_at\s+INTEGER,\r?\n/m, '');
+  }
+  if (omit.withoutSalesEntries) {
+    sql = sql
+      .replace(/CREATE TABLE sales_entries[\s\S]*?\);\r?\n/m, '')
+      .replace(/^CREATE INDEX idx_sales_period[^\n]*\r?\n/m, '');
+  }
+  return sql;
+}
+
 const TABLES = [
   'products',
   'stock_movements',
@@ -79,6 +104,7 @@ const TABLES = [
   'credit_entries',
   'expenses',
   'cash_ups',
+  'sales_entries',
 ];
 
 async function run() {
@@ -181,11 +207,13 @@ async function run() {
   console.log('TEST: a v4 database is migrated without losing data');
   console.log('========================================');
 
-  // Build the exact previous schema: all current tables, but without the v5
-  // due_at column. This is stronger than only changing PRAGMA user_version.
+  // Build the exact previous schema: every table as it stood at v4, without the
+  // v5 due_at column and without the v6 sales_entries table. Stronger than only
+  // changing PRAGMA user_version -- and it has to strip forward-dated tables
+  // too, or a broken migration step would pass because schema.sql had already
+  // created what the step was supposed to add.
   const staleRaw = new DatabaseSync(':memory:');
-  const v4Sql = readFileSync(join(REPO_ROOT, 'database', 'schema.sql'), 'utf8')
-    .replace(/^\s*due_at\s+INTEGER,\r?\n/m, '');
+  const v4Sql = historicalSchema({ withoutDueAt: true, withoutSalesEntries: true });
   staleRaw.exec(v4Sql);
   staleRaw.exec('PRAGMA user_version = 4;');
   staleRaw.exec(`
@@ -220,6 +248,77 @@ async function run() {
     1,
     'running setup again is idempotent'
   );
+
+  console.log('');
+  console.log('========================================');
+  console.log('TEST: a v5 database gains the sales book without losing data');
+  console.log('========================================');
+
+  // The upgrade that actually runs on a phone already carrying the pilot build.
+  // v5 had everything except sales_entries.
+  //
+  // Note what this does and does not prove. For an ADDITIVE table, the
+  // `CREATE TABLE IF NOT EXISTS` block at the end of initDatabase is what
+  // actually creates it -- the matching step in migrateDatabase is belt-and-
+  // braces, and deleting that step alone changes nothing. Verified by deleting
+  // it and watching these checks still pass.
+  //
+  // So these assert the OUTCOME an owner cares about (a v5 database ends up at
+  // v6, with a working sales book and every row intact) rather than which line
+  // did the work. The v4->v5 ALTER is the only step that must be a step, because
+  // adding a column cannot be expressed as CREATE IF NOT EXISTS -- and that one
+  // does fail if removed.
+  const v5Raw = new DatabaseSync(':memory:');
+  v5Raw.exec(historicalSchema({ withoutSalesEntries: true }));
+  v5Raw.exec('PRAGMA user_version = 5;');
+  v5Raw.exec(`
+    INSERT INTO products (id, name, current_qty, created_at, updated_at) VALUES (7, 'Bread', 5, 1, 1);
+    INSERT INTO customers (id, name, created_at, updated_at) VALUES (1, 'Thandi', 1, 1);
+    INSERT INTO credit_entries (id, customer_id, type, amount, due_at, recorded_at) VALUES (1, 1, 'CREDIT', 90, 500, 2);
+  `);
+
+  const hadSales = (v5Raw.prepare(
+    `SELECT COUNT(*) as c FROM sqlite_master WHERE type='table' AND name='sales_entries'`
+  ).get() as { c: number }).c;
+  equal(hadSales, 0, 'a v5 database genuinely has no sales book yet');
+
+  await initDatabase(adapt(v5Raw));
+
+  const gainedSales = (v5Raw.prepare(
+    `SELECT COUNT(*) as c FROM sqlite_master WHERE type='table' AND name='sales_entries'`
+  ).get() as { c: number }).c;
+  equal(gainedSales, 1, 'a v5 database ends up with the sales book');
+
+  equal(
+    (v5Raw.prepare("SELECT COUNT(*) as c FROM products WHERE id = 7").get() as { c: number }).c,
+    1,
+    'products survive v5 -> v6'
+  );
+  equal(
+    (v5Raw.prepare('SELECT due_at FROM credit_entries WHERE id = 1').get() as { due_at: number }).due_at,
+    500,
+    'a promised due date survives v5 -> v6'
+  );
+  equal(
+    (v5Raw.prepare('PRAGMA user_version').get() as { user_version: number }).user_version,
+    SCHEMA_VERSION,
+    'the migrated database is stamped v6'
+  );
+  check(
+    describe(v5Raw, 'sales_entries') === describe(freshRaw, 'sales_entries'),
+    'the migrated sales book matches a fresh one exactly'
+  );
+
+  // The upsert the sales book relies on needs its UNIQUE constraint to have
+  // survived the migration, not just the columns.
+  v5Raw.exec(`INSERT INTO sales_entries (period, period_key, amount, margin_pct, recorded_at) VALUES ('MONTH', '2026-01', 48000, 25, 1)`);
+  let duplicateRejected = false;
+  try {
+    v5Raw.exec(`INSERT INTO sales_entries (period, period_key, amount, margin_pct, recorded_at) VALUES ('MONTH', '2026-01', 999, 25, 1)`);
+  } catch {
+    duplicateRejected = true;
+  }
+  check(duplicateRejected, 'the migrated sales book still rejects a duplicate month');
 
   console.log('');
   console.log('========================================');

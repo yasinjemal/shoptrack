@@ -41,9 +41,13 @@ import {
   recordCount,
   recordCreditEntry,
   recordExpense,
+  recordSales,
   recordStockIn,
   restoreBackup,
   saveCountSession,
+  clearMonthSummary,
+  deleteSalesEntry,
+  loadSalesEntries,
   stockPurchaseTotal,
   toCoreProduct,
   type AppProduct,
@@ -54,6 +58,7 @@ import { calculateCreditSummary } from './credit';
 import { calculatePeriodSummary } from './calculations';
 import { calculateExpenseSummary, calculateNetProfit } from './expenses';
 import { calculateExpectedCash, cashTurnover, reconcile } from './cashup';
+import { calculateSalesHistory } from './sales';
 
 let failures = 0;
 
@@ -585,6 +590,87 @@ async function run() {
 
   console.log('');
   console.log('========================================');
+  console.log('TEST: the sales book through real SQL');
+  console.log('========================================');
+
+  const { db: salesDb } = await freshDb();
+
+  // The scenario: installed in July, paper book goes back to January.
+  await recordSales(salesDb, 'MONTH', '2026-01', 48000, 25, 'from the book', MONDAY);
+  await recordSales(salesDb, 'MONTH', '2026-02', 44000, 25, null, MONDAY);
+  await recordSales(salesDb, 'MONTH', '2026-03', 50000, 20, null, MONDAY);
+  // July is now being kept day by day.
+  await recordSales(salesDb, 'DAY', '2026-07-01', 1400, 25, null, MONDAY);
+  await recordSales(salesDb, 'DAY', '2026-07-02', 1600, 25, null, MONDAY);
+
+  const stored = await loadSalesEntries(salesDb);
+  equal(stored.length, 5, 'every entry is stored');
+  equal(stored[0].period_key, '2026-07-02', 'entries come back newest first');
+  equal(stored[4].notes, 'from the book', 'notes round-trip');
+  equal(stored[3].notes, undefined, 'a missing note is undefined, not null');
+  equal(stored[4].margin_pct, 25, 'the margin snapshot round-trips');
+
+  const salesHistory = calculateSalesHistory(stored);
+  equal(salesHistory.months.length, 4, 'four months have data');
+  equal(salesHistory.total_sales, 145000, 'takings from real rows: 48000+44000+50000+3000');
+  equal(salesHistory.total_profit, 33750, 'profit from real rows, each month at its own margin');
+
+  const january = salesHistory.months.find(m => m.month_key === '2026-01')!;
+  equal(january.profit, 12000, 'January profit is R12,000');
+
+  // Re-entering a day corrects it rather than adding a second one.
+  await recordSales(salesDb, 'DAY', '2026-07-01', 1500, 25, 'recounted', MONDAY + DAY);
+  const corrected = await loadSalesEntries(salesDb);
+  equal(corrected.length, 5, 'correcting a day does not create a duplicate');
+  equal(
+    corrected.find(e => e.period_key === '2026-07-01')!.amount,
+    1500,
+    'the corrected amount replaces the old one'
+  );
+
+  // A day and a month can both exist; the engine reports the clash.
+  await recordSales(salesDb, 'MONTH', '2026-07', 40000, 25, null, MONDAY);
+  const clashing = calculateSalesHistory(await loadSalesEntries(salesDb));
+  equal(clashing.conflicts.length, 1, 'the day/month clash is reported');
+  equal(clashing.conflicts[0].month_key, '2026-07', 'and names the month');
+
+  // Clearing the summary resolves it, leaving the days.
+  await clearMonthSummary(salesDb, '2026-07');
+  const resolved = calculateSalesHistory(await loadSalesEntries(salesDb));
+  equal(resolved.conflicts.length, 0, 'clearing the month total resolves the clash');
+  equal(resolved.months.find(m => m.month_key === '2026-07')!.sales, 3100, 'the days survive');
+
+  const removable = (await loadSalesEntries(salesDb)).find(e => e.period_key === '2026-03')!;
+  await deleteSalesEntry(salesDb, removable.id);
+  equal((await loadSalesEntries(salesDb)).length, 4, 'an entry can be removed');
+
+  // The database refuses nonsense the UI should never send.
+  const badMargin = await (async () => {
+    try {
+      await recordSales(salesDb, 'DAY', '2026-07-09', 100, 150, null, MONDAY);
+      return false;
+    } catch { return true; }
+  })();
+  check(badMargin, 'the database refuses a margin over 100%');
+
+  const negativeSales = await (async () => {
+    try {
+      await recordSales(salesDb, 'DAY', '2026-07-10', -100, 25, null, MONDAY);
+      return false;
+    } catch { return true; }
+  })();
+  check(negativeSales, 'the database refuses negative takings');
+
+  // A closed day is a real thing: zero takings must be recordable.
+  await recordSales(salesDb, 'DAY', '2026-07-11', 0, 25, 'closed', MONDAY);
+  equal(
+    (await loadSalesEntries(salesDb)).find(e => e.period_key === '2026-07-11')!.amount,
+    0,
+    'a day the shop was closed records as zero, not as an error'
+  );
+
+  console.log('');
+  console.log('========================================');
   console.log('TEST: an empty shop does not crash');
   console.log('========================================');
 
@@ -594,6 +680,7 @@ async function run() {
   equal((await loadCustomers(emptyDb)).length, 0, 'no customers');
   equal((await loadCreditEntries(emptyDb)).length, 0, 'no credit entries');
   equal((await loadExpenses(emptyDb)).length, 0, 'no expenses');
+  equal((await loadSalesEntries(emptyDb)).length, 0, 'no sales entries');
 
   const emptyBook = calculateCreditSummary([], [], MONDAY, MONDAY + 7 * DAY, MONDAY);
   equal(emptyBook.total_outstanding, 0, 'an empty book is zero, not NaN');
