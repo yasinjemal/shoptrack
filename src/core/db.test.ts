@@ -21,26 +21,34 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { initDatabase, type MigrationDb } from './schema';
 import {
+  addProduct,
   addCustomer,
   addCustomerToBook,
+  createBackup,
   deactivateCustomer,
   deleteExpense,
   getLastCashUp,
+  getLatestCountSession,
   loadCashUps,
   loadCreditEntries,
   loadCustomers,
   loadExpenses,
   loadMovements,
   loadProducts,
+  normaliseBackup,
   openingBalanceFrom,
   recordCashUp,
   recordCount,
   recordCreditEntry,
   recordExpense,
   recordStockIn,
+  restoreBackup,
+  saveCountSession,
   stockPurchaseTotal,
   toCoreProduct,
   type AppProduct,
+  undoCountSession,
+  undoStockIn,
 } from './db';
 import { calculateCreditSummary } from './credit';
 import { calculatePeriodSummary } from './calculations';
@@ -427,6 +435,153 @@ async function run() {
     storedExpected,
     'a backdated expense does not rewrite a past cash-up'
   );
+
+  console.log('');
+  console.log('========================================');
+  console.log('TEST: count and stock corrections are safe');
+  console.log('========================================');
+
+  const { db: correctionDb } = await freshDb();
+  const correctionProductId = await addProduct(
+    correctionDb,
+    { name: 'Milk', buyPrice: 10, sellPrice: 14, quantity: 10 },
+    MONDAY
+  );
+  const correctionProduct = (await loadProducts(correctionDb)).find(p => p.id === correctionProductId)!;
+
+  const saved = await saveCountSession(
+    correctionDb,
+    [{ product: correctionProduct, quantity: 7 }],
+    1,
+    MONDAY + DAY
+  );
+  equal((await getLatestCountSession(correctionDb))?.id, saved.sessionId, 'latest count session is findable');
+  equal((await loadProducts(correctionDb))[0].current_qty, 7, 'atomic count updates current stock');
+  check(
+    await undoCountSession(correctionDb, saved.sessionId, MONDAY + DAY + 1000),
+    'latest count can be undone within one hour'
+  );
+  equal((await loadProducts(correctionDb))[0].current_qty, 10, 'undo restores the previous quantity');
+  equal(await getLatestCountSession(correctionDb), null, 'undo removes the count session');
+
+  const deliveryId = await recordStockIn(
+    correctionDb,
+    (await loadProducts(correctionDb))[0],
+    5,
+    60,
+    MONDAY + 2 * DAY
+  );
+  equal((await loadProducts(correctionDb))[0].current_qty, 15, 'delivery increases current stock');
+  equal((await loadProducts(correctionDb))[0].buy_price, 12, 'delivery updates the buy price');
+  check(
+    await undoStockIn(correctionDb, deliveryId, MONDAY + 2 * DAY + 1000),
+    'delivery can be undone within 24 hours'
+  );
+  equal((await loadProducts(correctionDb))[0].current_qty, 10, 'delivery undo restores quantity');
+  equal((await loadProducts(correctionDb))[0].buy_price, 10, 'delivery undo restores the prior buy price');
+
+  const invalidProduct: AppProduct = {
+    id: 999,
+    name: 'Missing',
+    unit_label: 'units',
+    buy_price: 1,
+    sell_price: 2,
+    current_qty: 0,
+  };
+  let countRolledBack = false;
+  try {
+    await saveCountSession(
+      correctionDb,
+      [
+        { product: (await loadProducts(correctionDb))[0], quantity: 4 },
+        { product: invalidProduct, quantity: 1 },
+      ],
+      2,
+      MONDAY + 3 * DAY
+    );
+  } catch {
+    countRolledBack = true;
+  }
+  check(countRolledBack, 'a failed multi-product count is rejected');
+  equal((await loadProducts(correctionDb))[0].current_qty, 10, 'failed count rolls back product updates');
+  equal(await getLatestCountSession(correctionDb), null, 'failed count rolls back its session');
+
+  console.log('');
+  console.log('========================================');
+  console.log('TEST: backup and restore covers the whole shop');
+  console.log('========================================');
+
+  const { db: backupSource } = await freshDb();
+  const backupProductId = await addProduct(
+    backupSource,
+    { name: 'Bread', buyPrice: 14, sellPrice: 18, quantity: 20 },
+    MONDAY
+  );
+  const backupProduct = (await loadProducts(backupSource)).find(p => p.id === backupProductId)!;
+  await recordStockIn(backupSource, backupProduct, 10, 140, MONDAY + 1000);
+  await saveCountSession(
+    backupSource,
+    [{ product: (await loadProducts(backupSource))[0], quantity: 12 }],
+    1,
+    MONDAY + DAY
+  );
+  await addCustomerToBook(
+    backupSource,
+    { name: 'Lerato', phone: '0720000000' },
+    { amount: 35, notes: 'Bread', dueAt: MONDAY + 7 * DAY },
+    MONDAY + DAY
+  );
+  await recordExpense(backupSource, 'TRANSPORT', 40, 'Taxi', MONDAY + DAY);
+  await recordCashUp(
+    backupSource,
+    { counted: 200, expected: 190, difference: 10 },
+    { takenOut: 50 },
+    MONDAY + DAY
+  );
+
+  const backup = await createBackup(backupSource);
+  equal(backup.backup_format_version, 1, 'backup format is independent from schema version');
+  check(backup.data.products.length > 0, 'backup includes products');
+  check(backup.data.stock_movements.length > 0, 'backup includes stock movements');
+  check(backup.data.count_sessions.length > 0, 'backup includes count sessions');
+  check(backup.data.customers.length > 0, 'backup includes customers');
+  check(backup.data.credit_entries.length > 0, 'backup includes credit entries');
+  check(backup.data.expenses.length > 0, 'backup includes expenses');
+  check(backup.data.cash_ups.length > 0, 'backup includes cash-ups');
+
+  const { db: backupTarget } = await freshDb();
+  await restoreBackup(backupTarget, backup);
+  equal((await loadProducts(backupTarget))[0].name, 'Bread', 'restored product round-trips');
+  equal((await loadMovements(backupTarget)).length, backup.data.stock_movements.length, 'all movements restore');
+  equal((await loadCustomers(backupTarget))[0].name, 'Lerato', 'customers restore');
+  equal((await loadCreditEntries(backupTarget))[0].amount, 35, 'credit ledger restores');
+  equal((await loadExpenses(backupTarget))[0].amount, 40, 'expenses restore');
+  equal((await loadCashUps(backupTarget))[0].counted_amount, 200, 'cash-ups restore');
+
+  const brokenBackup = structuredClone(backup);
+  brokenBackup.data.expenses[0].category = 'STOCK';
+  let restoreRolledBack = false;
+  try {
+    await restoreBackup(backupTarget, brokenBackup);
+  } catch {
+    restoreRolledBack = true;
+  }
+  check(restoreRolledBack, 'invalid restore is rejected');
+  equal((await loadProducts(backupTarget))[0].name, 'Bread', 'failed restore keeps existing data');
+  equal((await loadExpenses(backupTarget))[0].category, 'TRANSPORT', 'failed restore rolls back every table');
+
+  const legacy = normaliseBackup({
+    shoptrack_backup: true,
+    version: 5,
+    created_at: backup.created_at,
+    data: {
+      products: backup.data.products,
+      stock_movements: backup.data.stock_movements,
+      count_sessions: backup.data.count_sessions,
+    },
+  });
+  equal(legacy.backup_format_version, 1, 'legacy pre-pilot backup is upgraded');
+  equal(legacy.data.customers.length, 0, 'missing legacy tables become explicit empty sets');
 
   console.log('');
   console.log('========================================');

@@ -1,107 +1,63 @@
 # Before the Pilot
 
-Things that are deliberately unsafe while ShopTrack has no users, and must be
-changed before a real shop puts real data in.
+Pilot-readiness record for the safeguards that protect a shop's data. Items
+marked resolved are held by automated tests; the real-device check remains a
+manual Day 0 gate.
 
 ShopTrack is pre-release. Some code here trades safety for speed on purpose.
 That is the right trade *today* and the wrong trade the moment a shop owner
 counts their stock into it. This file is the list of those trades, what each
 one does, why it exists, and what to do about it.
 
-**If you read one thing, read tripwire 1.**
+**Current status:** data-reset and backup-format tripwires are resolved. The
+Android 1.0.1 preview build completed successfully on 14 July 2026
+([install page](https://expo.dev/accounts/yasinali69/projects/ShopTrackApp/builds/7f20af1b-0663-41ab-ab0c-fbc9721f1601)). The real Android
+upgrade/backup/restore rehearsal is still required before Day 0.
 
 ---
 
-## Tripwire 1: The database erases itself on a schema change
+## Tripwire 1: Database updates preserve data — resolved
 
 | | |
 |---|---|
-| **Where** | `src/core/schema.ts` — `ALLOW_DESTRUCTIVE_RESET` |
-| **Now** | `true` |
-| **Before pilot** | `false` |
+| **Where** | `src/core/schema.ts` — `migrateDatabase()` and `initDatabase()` |
+| **Now** | Destructive reset removed; supported versions migrate in place |
+| **Test** | `schema.test.ts` migrates a populated v4 database and proves every row survives |
 | **If ignored** | An app update wipes every shop's books. Silently. |
 
-### What it does
+### Current behaviour
 
-On startup, `initDatabase()` compares the database's `PRAGMA user_version`
-against `SCHEMA_VERSION` in the code. If they differ:
+On startup, `initDatabase()` compares `PRAGMA user_version` with
+`SCHEMA_VERSION`. Fresh databases are created at the current shape. Committed
+versions 2 through 4 follow additive, transactional migrations to version 5.
+Unknown or future versions fail closed and leave every row untouched.
 
-- **`ALLOW_DESTRUCTIVE_RESET = true`** → drops every table and rebuilds empty.
-- **`ALLOW_DESTRUCTIVE_RESET = false`** → throws, refusing to touch the data.
-
-### Why it exists
-
-The schema is still moving. Adding the credit book and the expenses table were
-each a one-line change (`SCHEMA_VERSION = 2`, then `3`) instead of a
-hand-written migration that would be thrown away a week later. With no users,
-the data being erased is your own test data, and the cost is zero.
-
-### Why it becomes dangerous
-
-A shop's entire book — every count, every debt, every expense — lives in one
-SQLite file on one phone. There is no server copy. The moment you ship a build
-with a bumped `SCHEMA_VERSION` and this flag still `true`, that file is
-deleted on next launch and the owner has no way to get it back. They will not
-report it as a bug. They will just stop using the app.
-
-### What to do
-
-1. Set `ALLOW_DESTRUCTIVE_RESET = false`.
-2. Run the app against a database at the previous version. It should throw.
-3. From then on, every `SCHEMA_VERSION` bump needs a real migration
-   (see [Writing a migration](#writing-a-migration-when-you-turn-the-reset-off)).
-
-The throw is the point. It converts "silently destroyed a shop's data" into
-"the app won't start on my machine", which you will notice.
+Every future `SCHEMA_VERSION` bump must add a migration and a populated upgrade
+test. There is deliberately no reset flag and no drop-all fallback anymore.
 
 ---
 
-## Tripwire 2: Backups die when the schema version changes
+## Tripwire 2: Backups have an independent format — resolved
 
 | | |
 |---|---|
-| **Where** | `App.tsx` — `handleBackup` writes `version: SCHEMA_VERSION`; `handleRestore` rejects any mismatch |
-| **Now** | Backup format version is hard-tied to the schema version |
-| **Before pilot** | Decouple them, or write backup upgraders |
+| **Where** | `src/core/db.ts` — `BACKUP_FORMAT_VERSION`, `createBackup`, `restoreBackup` |
+| **Now** | Format v1 is independent from schema v5 and the old three-table format has an upgrader |
+| **Test** | All seven tables round-trip; an invalid restore rolls back without replacing current data |
 | **If ignored** | Every backup a shop has made becomes unrestorable the first time you change the schema |
 
-### What it does
+### Current behaviour
 
-A backup file records the current `SCHEMA_VERSION`. Restore refuses any file
-whose version does not match exactly, showing "Backup is too old".
-
-### Why it exists
-
-Post-reset the table shape changes, so an old backup would restore rows that
-no longer fit the tables. Refusing is better than restoring a broken shop.
-
-### Why it becomes dangerous
-
-This is the *second-order* effect of tripwire 1, and it survives fixing
-tripwire 1. Even with migrations written and the reset turned off, bumping
-`SCHEMA_VERSION` still invalidates every backup file already sitting in
-someone's WhatsApp. The backup is the shop's only safety net, and the app
-tells them to keep it somewhere safe — then stops reading it.
-
-Worse: this fails at the exact moment it matters. A shop restores a backup
-because something went wrong. That is when they discover it is unreadable.
-
-### What to do
-
-Pick one:
-
-- **Give backups their own version number** that only changes when the *file
-  format* changes, and upgrade old files on restore (the same shape as a
-  migration, but for JSON).
-- **Or** keep them coupled and write an upgrade path per version, so restore
-  transforms an old file instead of rejecting it.
-
-Either way, `RESTORE_OLD_VERSION` should become a genuinely rare last resort,
-not the normal outcome of shipping an update.
+`backup_format_version` changes only when the JSON contract changes;
+`schema_version` is informational. A backup contains products, stock movements,
+count sessions, customers, credit entries, expenses, and cash-ups. Restore
+validates before writing, replaces all seven sets transactionally, and rolls
+back to the existing shop if any row is invalid. The old pre-pilot three-table
+version-5 file is upgraded to format v1 with explicit empty newer tables.
 
 ---
 
-## Tripwire 3: The migration has never run on a real phone
+## Tripwire 3: Run the migration and restore on a real phone — pending
 
 | | |
 |---|---|
@@ -113,7 +69,7 @@ not the normal outcome of shipping an update.
 ### What it does
 
 `schema.test.ts` builds real SQLite databases and asserts the schema is created,
-stale versions are rebuilt, and `database/schema.sql` has not drifted from the
+stale versions are migrated without losing rows, and `database/schema.sql` has not drifted from the
 code. That is real SQL against a real engine — but it is `node:sqlite`, not the
 SQLite that ships inside expo on Android.
 
@@ -128,9 +84,9 @@ the device case.
 
 Before Day 0 of the pilot, on a real Android phone:
 
-1. Install a build, add products, record a count, a credit entry, an expense.
-2. Install the next build with a bumped `SCHEMA_VERSION`.
-3. Confirm the intended behaviour (rebuild now; migration later).
+1. Install the previous build, add products, record a count, a credit entry, and an expense.
+2. Install the 1.0.1 preview build over it without uninstalling the app.
+3. Confirm every original row remains and the new column/table is usable.
 4. Make a backup and restore it.
 
 ---
@@ -152,7 +108,7 @@ Day 15. That is the real deadline for tripwires 1–3.
 
 ---
 
-## There are no UI tests, and that has already cost a shipped bug
+## UI verification
 
 Every engine here is covered. No screen is.
 
@@ -172,11 +128,17 @@ Two things came out of it, and neither is a fix:
 - `db.test.ts` walks the journey — add a person, then look for them — rather
   than only checking the maths. Do this for new features.
 
-**The real gap remains: nothing renders a component in CI.** Engine tests
+**The remaining gap: nothing renders a component in CI.** Engine tests
 answer "is the arithmetic right?", never "can a person use this?". Until that
 changes, a feature is not done when the tests pass — it is done when it has been
 tapped through on a phone. Budget for that on every feature, and expect the
 pilot to find this class of thing.
+
+`npm run test:ui-flow` now pins the critical screen wiring (Review before save,
+first-count language, Undo, state-driven Home, scrollable Weekly Summary,
+searchable Stock-In, and bilingual core copy), and both web and Android bundles
+are compiled before a pilot build. That catches wiring and bundling regressions;
+the real-phone tap-through remains the final proof.
 
 ---
 
@@ -216,7 +178,7 @@ and verify on a device — which is where it needs to be verified anyway
 
 ---
 
-## Writing a migration when you turn the reset off
+## Writing a migration
 
 The v0→v1 migration was written, then deleted when it became clear there were
 no users to migrate. **It was removed before the first commit, so it is not in
@@ -369,6 +331,6 @@ mistakes are corrected by adding the opposite entry, not by editing history.
   you will not know unless they tell you — and they will not tell you. Consider
   adding something before Day 0, or plan to ask directly at each check-in.
 - **Adding an expense category is a schema change.** The category list is a
-  `CHECK` constraint, so a new one needs a migration once the reset is off.
-- **`app.json` version is still `1.0.0`.** Bump it for the pilot build so you
-  can tell which build a shop is actually running when something goes wrong.
+  `CHECK` constraint, so a new one needs a migration.
+- **Pilot build identity:** `app.json` and `package.json` are bumped for each
+  installable pilot build so a shop can report exactly which build it has.

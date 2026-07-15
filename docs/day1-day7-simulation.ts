@@ -17,6 +17,27 @@
  * His question: "Am I actually making money?"
  */
 
+/**
+ * IMPLEMENTATION STATUS (pilot build 1.0.1)
+ *
+ * This file preserves the simulation that found the original gaps. The gaps
+ * described below are historical rationale, not the current screen state:
+ * - Home and Products both expose Count Stock.
+ * - A first count shows a baseline result, never R0/negative profit.
+ * - Count now has a no-write Review step and first-count-specific rows.
+ * - Count save is transactional and the latest count can be undone for an hour.
+ * - Product setup ends with a "You're ready to track" count prompt.
+ * - The core loop is fully available in English and isiZulu.
+ * - Home prompts the owner to count again after seven days.
+ */
+const IMPLEMENTATION_STATUS = {
+  pilot_build: '1.0.1',
+  P0_before_any_pilot: 'complete',
+  P1_before_real_users: 'complete',
+  P2_nice_to_have: 'complete',
+  manual_gate_remaining: 'Run the upgrade, backup, restore, and tap-through on a real Android phone.',
+} as const;
+
 // ============================================
 // 📅 DAY 1: INSTALL DAY (5 minutes max)
 // ============================================
@@ -742,6 +763,7 @@ const REQUIRED_CHANGES = {
 };
 
 export {
+  IMPLEMENTATION_STATUS,
   DAY_1_WALKTHROUGH,
   DAY_3_WALKTHROUGH,
   DAY_7_WALKTHROUGH,

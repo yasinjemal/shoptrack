@@ -2,13 +2,16 @@
  * Styles specific to expenses.
  *
  * Shared pieces (container, headers, inputs, save button) come from
- * ../styles. Palette matches the rest of the app:
- *   #4CAF50 green   = money in
- *   #E67E22 orange  = money owed to the shop (credit)
- *   #C0392B red     = money going out (expenses)
+ * ../styles; every colour, size and space comes from ../theme.
+ *
+ * Expenses are money leaving the shop, so this screen is red throughout.
+ * Green appears only on the category the owner has chosen — an action, not an
+ * amount.
  */
 
 import { StyleSheet } from 'react-native';
+
+import { color } from '../theme';
 
 export const expenseStyles = StyleSheet.create({
   list: {
@@ -22,27 +25,27 @@ export const expenseStyles = StyleSheet.create({
   totalCard: {
     marginHorizontal: 16,
     marginTop: 12,
-    backgroundColor: '#FDF3F2',
+    backgroundColor: color.redSoft,
     padding: 20,
     borderRadius: 12,
     alignItems: 'center',
   },
   totalLabel: {
     fontSize: 13,
-    color: '#888888',
+    color: color.inkMuted,
     marginBottom: 4,
   },
   totalAmount: {
     fontSize: 32,
     fontWeight: '700',
-    color: '#C0392B',
+    color: color.redInk,
   },
 
   // Category breakdown
   breakdownCard: {
     marginHorizontal: 16,
     marginTop: 12,
-    backgroundColor: '#FAFAFA',
+    backgroundColor: color.surfaceSunken,
     borderRadius: 12,
     padding: 12,
   },
@@ -58,17 +61,17 @@ export const expenseStyles = StyleSheet.create({
   breakdownName: {
     flex: 1,
     fontSize: 14,
-    color: '#555555',
+    color: color.inkSecondary,
   },
   breakdownShare: {
     fontSize: 12,
-    color: '#AAAAAA',
+    color: color.inkMuted,
     marginRight: 12,
   },
   breakdownAmount: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#1A1A1A',
+    color: color.ink,
   },
 
   // One expense
@@ -77,10 +80,10 @@ export const expenseStyles = StyleSheet.create({
     alignItems: 'center',
     marginHorizontal: 16,
     marginTop: 8,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#EEEEEE',
+    borderColor: color.border,
     padding: 14,
   },
   expenseIcon: {
@@ -93,17 +96,17 @@ export const expenseStyles = StyleSheet.create({
   expenseCategory: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#1A1A1A',
+    color: color.ink,
   },
   expenseNote: {
     fontSize: 12,
-    color: '#AAAAAA',
+    color: color.inkMuted,
     marginTop: 2,
   },
   expenseAmount: {
     fontSize: 16,
     fontWeight: '700',
-    color: '#C0392B',
+    color: color.redInk,
   },
 
   // Category picker
@@ -120,12 +123,12 @@ export const expenseStyles = StyleSheet.create({
     paddingHorizontal: 14,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
-    backgroundColor: '#FFFFFF',
+    borderColor: color.border,
+    backgroundColor: color.surface,
   },
   categoryChipActive: {
-    borderColor: '#4CAF50',
-    backgroundColor: '#F1F8F2',
+    borderColor: color.greenBorder,
+    backgroundColor: color.greenSoft,
   },
   categoryChipIcon: {
     fontSize: 15,
@@ -133,15 +136,15 @@ export const expenseStyles = StyleSheet.create({
   },
   categoryChipText: {
     fontSize: 14,
-    color: '#666666',
+    color: color.inkSecondary,
   },
   categoryChipTextActive: {
-    color: '#2E7D32',
+    color: color.greenInk,
     fontWeight: '600',
   },
   notStockHint: {
     fontSize: 12,
-    color: '#AAAAAA',
+    color: color.inkMuted,
     marginTop: 10,
     fontStyle: 'italic',
     lineHeight: 17,
@@ -155,13 +158,13 @@ export const expenseStyles = StyleSheet.create({
   emptyTitle: {
     fontSize: 20,
     fontWeight: '600',
-    color: '#1A1A1A',
+    color: color.ink,
     marginBottom: 8,
     textAlign: 'center',
   },
   emptyHint: {
     fontSize: 14,
-    color: '#888888',
+    color: color.inkMuted,
     textAlign: 'center',
     marginBottom: 24,
     lineHeight: 20,

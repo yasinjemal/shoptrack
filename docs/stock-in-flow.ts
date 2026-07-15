@@ -120,7 +120,7 @@
  * StockInScreen.handleSave()
  *         │
  *         ▼
- * StockInService.recordStockIn()
+ * src/core/db.ts recordStockIn()
  *         │
  *         ├── INSERT into stock_movements (type='STOCK_IN')
  *         │

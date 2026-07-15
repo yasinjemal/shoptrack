@@ -42,6 +42,9 @@ import { styles } from '../styles';
 import { expenseStyles as es } from './styles';
 
 export interface ExpenseStrings {
+  BACK: string;
+  ADD: string;
+  ERROR_TITLE: string;
   EXPENSES_TITLE: string;
   EXPENSES_EMPTY: string;
   EXPENSES_EMPTY_HINT: string;
@@ -111,7 +114,7 @@ export function ExpensesScreen({
               onChanged();
             } catch (error) {
               console.error('Delete expense error:', error);
-              Alert.alert('Error', strings.ERROR_GENERIC);
+              Alert.alert(strings.ERROR_TITLE, strings.ERROR_GENERIC);
             }
           },
         },
@@ -140,11 +143,11 @@ export function ExpensesScreen({
 
       <View style={styles.screenHeader}>
         <TouchableOpacity onPress={onBack}>
-          <Text style={styles.backButton}>← Back</Text>
+          <Text style={styles.backButton}>{strings.BACK}</Text>
         </TouchableOpacity>
         <Text style={styles.screenTitle}>{strings.EXPENSES_TITLE}</Text>
         <TouchableOpacity onPress={() => setAdding(true)}>
-          <Text style={styles.backButton}>+ Add</Text>
+          <Text style={styles.backButton}>{strings.ADD}</Text>
         </TouchableOpacity>
       </View>
 
@@ -226,7 +229,7 @@ function AddExpenseScreen({
       onSaved();
     } catch (error) {
       console.error('Record expense error:', error);
-      Alert.alert('Error', strings.ERROR_GENERIC);
+      Alert.alert(strings.ERROR_TITLE, strings.ERROR_GENERIC);
       setSaving(false);
     }
   };

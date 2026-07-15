@@ -143,9 +143,12 @@ export function calculateProductMetrics(
     priorMovements
   );
   
-  // Calculate financial metrics using historical prices
-  const estimated_revenue = estimated_sold * sell_price_used;
-  const estimated_cost = estimated_sold * buy_price_used;
+  // Negative sales mean an unrecorded delivery or a first baseline, never a
+  // real loss. Clamp before every money calculation so a first count cannot
+  // surface as negative profit on Home.
+  const sold_for_money = Math.max(0, estimated_sold);
+  const estimated_revenue = sold_for_money * sell_price_used;
+  const estimated_cost = sold_for_money * buy_price_used;
   const estimated_profit = estimated_revenue - estimated_cost;
   const profit_margin = estimated_revenue > 0 
     ? (estimated_profit / estimated_revenue) * 100 
@@ -176,8 +179,8 @@ export function calculateProductMetrics(
     opening_qty,
     stock_in_qty,
     closing_qty,
-    estimated_sold: Math.max(0, estimated_sold), // Never show negative sales
-    estimated_revenue: Math.max(0, estimated_revenue),
+    estimated_sold: sold_for_money, // Never show negative sales
+    estimated_revenue,
     estimated_profit,
     profit_margin,
     buy_price_used,

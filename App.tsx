@@ -6,11 +6,13 @@
  * Offline-first, stock-movement based, no POS required.
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
+  Animated,
   Text,
   View,
-  TouchableOpacity, 
+  TouchableOpacity,
+  Pressable,
   SafeAreaView,
   ActivityIndicator,
   Alert,
@@ -30,14 +32,25 @@ import {
   getPeriodBounds,
 } from './src/core/calculations';
 import {
+  addProduct,
+  createBackup,
+  deactivateProduct,
+  getLatestCountSession,
   loadMovements,
   loadProducts,
-  recordCount,
+  loadCountSessionProductIds,
+  loadPreviouslyCountedProductIds,
+  normaliseBackup,
   recordStockIn,
+  restoreBackup,
+  saveCountSession,
   toCoreProduct,
+  undoCountSession,
+  undoStockIn,
+  updateProduct,
   type AppProduct,
 } from './src/core/db';
-import { initDatabase, SCHEMA_VERSION } from './src/core/schema';
+import { initDatabase } from './src/core/schema';
 import {
   calculateCreditSummary,
   summariseOutstanding,
@@ -60,6 +73,7 @@ import {
   type CashUp,
 } from './src/core/db';
 import { styles } from './src/ui/styles';
+import { color, motion } from './src/ui/theme';
 import { CreditScreen } from './src/ui/credit/CreditScreen';
 import { ExpensesScreen } from './src/ui/expenses/ExpensesScreen';
 import { CashUpScreen } from './src/ui/cashup/CashUpScreen';
@@ -105,6 +119,20 @@ const STRINGS = {
     // Count screen
     COUNT_HEADER: "How many do you have right now?",
     COUNT_HINT: "Count what's on your shelves",
+    COUNT_REVIEW_TITLE: "Review your count",
+    COUNT_REVIEW_HINT: "Check these numbers before they change your profit.",
+    COUNT_FIRST_VALUE: (name: string, qty: number) => `${name}: first count ${qty}`,
+    COUNT_CHANGE_VALUE: (name: string, before: number, after: number) => `${name}: ${before} → ${after}`,
+    COUNT_REVIEW_BUTTON: (count: number) => `Review ${count} counted`,
+    COUNT_SAVE_BUTTON: "Save count",
+    COUNT_GO_BACK: "Go back",
+    COUNT_UNDO: "Undo this count",
+    COUNT_UNDO_CONFIRM: "This removes the latest count and restores the stock quantities from before it.",
+    COUNT_UNDONE: "Count removed",
+    COUNT_UNDONE_HINT: "Your previous stock quantities are back.",
+    COUNT_UNDO_EXPIRED: "This count can no longer be undone.",
+    COUNT_REMINDER_TITLE: "Time to count again",
+    COUNT_REMINDER_HINT: "It has been a week. Count what's left to refresh your profit.",
     FIRST_COUNT_HINT: "This is your starting point — we'll compare future counts to this.",
     
     // Results - Profit Explanation (Tier 3.1)
@@ -142,6 +170,7 @@ const STRINGS = {
     
     // Errors
     ERROR_GENERIC: "Something went wrong",
+    ERROR_TITLE: "Error",
     ERROR_BACKUP: "Could not create backup",
     ERROR_RESTORE: "Could not restore backup",
     DB_ERROR_TITLE: "Can't open your shop data",
@@ -218,6 +247,8 @@ const STRINGS = {
     CREDIT_PAID_UP: "They will be all paid up",
     CREDIT_PAID_UP_TAG: "Paid up",
     CREDIT_OWES_YOU_CHANGE: "You owe them change",
+    CREDIT_CURRENT_OWES: (amount: string) => `Owes you ${amount}`,
+    CREDIT_CURRENT_CHANGE: (amount: string) => `You owe them ${amount} change`,
     // Shown next to profit, never subtracted from it (see src/core/credit.ts)
     CREDIT_NOT_IN_HAND: (amount: string) => `${amount} of this is still owed to you.`,
 
@@ -287,6 +318,117 @@ const STRINGS = {
     CASHUP_HISTORY: "Last few cash ups",
     CASHUP_CANCEL: "Cancel",
     CASHUP_HOME_SHORTFALL: "was missing at your last cash up. Tap to look again.",
+    CASHUP_FLOAT: "float",
+    CASHUP_STATEMENT_BALANCED: "Your till matches what the app expected.",
+    CASHUP_STATEMENT_OVER: (amount: string) => `You have ${amount} more than expected. A sale or payment may not have been written down.`,
+    CASHUP_STATEMENT_SHORT_LARGE: (amount: string) => `You are ${amount} short. Check stock bought, an expense paid, or credit given that was not recorded.`,
+    CASHUP_STATEMENT_SHORT_SMALL: (amount: string) => `You are ${amount} short. This is often change given or a small expense not written down.`,
+    FORMAT_WHEN: (ts: number) => new Date(ts).toLocaleString('en-ZA', { dateStyle: 'medium', timeStyle: 'short' }),
+
+    // Shared app, product, and activity UI
+    APP_TAGLINE: "Know your profit",
+    STARTING_APP: "Starting ShopTrack...",
+    HOW_TITLE: "📊 How it works",
+    HOW_STEP_1: "Add your products (name + prices)",
+    HOW_STEP_2: "Count your stock today",
+    HOW_STEP_3: "Count again in a few days",
+    HOW_STEP_4: "See your profit here! ⬇️",
+    HOW_NOTE: "Count what's left and ShopTrack works out what sold and what you made.",
+    YOUR_PROFIT: "Your Profit",
+    PROFIT_EXPLAINER: "Based on stock sold since your last count",
+    PRODUCTS_LABEL: "Products",
+    ITEMS_IN_STOCK: "Items in Stock",
+    COUNT_STOCK: "Count Stock",
+    COUNT_TO_PROFIT: "Count now to refresh your profit",
+    COUNT_BASELINE: "First count = your starting point",
+    ADD_STOCK: "Add Stock",
+    WHEN_YOU_BUY: "When you buy",
+    ADD_OR_EDIT: "Add or edit",
+    RECENT_ACTIVITY: "Recent Activity",
+    THIS_WEEK: "This Week",
+    RUNNING_LOW: "⚠️ Running Low",
+    STOCK_LEFT: (name: string, qty: number) => `${name}: ${qty} left`,
+    WELCOME_TITLE: "👋 Welcome to ShopTrack!",
+    WELCOME_TEXT: "Add what you sell. We'll show you how much you make.",
+    WELCOME_HOW: "Start with three products. Count what's left regularly and ShopTrack works out what sold.",
+    ADD_FIRST_PRODUCT: "Add Your First Product",
+    YOUR_DATA: "Your Data",
+    SAVE_DATA: "Save a copy of your shop data",
+    SAVE_DATA_HINT: "Keep it safe on WhatsApp or Google Drive",
+    RESTORE_DATA: "Restore from backup",
+    RESTORE_DATA_HINT: "Get all your data back on a new phone",
+    BACKUP_DIALOG_TITLE: "Save your ShopTrack backup",
+    RESTORE_ACTION: "Restore",
+    BACK: "← Back",
+    CANCEL: "Cancel",
+    ADD: "+ Add",
+    SEARCH_PRODUCTS: "Search products...",
+    NO_PRODUCTS: "No products yet",
+    ADD_PRODUCT: "Add Product",
+    READY_TO_TRACK: "You're ready to track",
+    READY_TO_TRACK_HINT: "Add another product, or start counting when you're ready.",
+    START_COUNTING: "Start counting",
+    ADD_PRODUCTS_FIRST: "Add products first",
+    NO_PRODUCT_MATCH: (query: string) => `No products match "${query}"`,
+    PRODUCT_META: (qty: number, unit: string, sell: number | null, buy: number | null) =>
+      `${qty} ${unit}${sell != null ? ` • Sell: R${sell}` : ''}${buy != null ? ` • Buy: R${buy}` : ''}`,
+    CREDIT_HOME_STATUS: (owing: number, overdue: number, stale: number) =>
+      `${owing === 1 ? '1 person' : `${owing} people`}${overdue > 0 ? ` · ${overdue} late` : stale > 0 ? ` · ${stale} not paid in a while` : ''}`,
+    WHAT_DO_YOU_SELL: "What do you sell?",
+    PRODUCT_EXAMPLE: "e.g., Coca-Cola 500ml",
+    SELL_PRICE_OPTIONAL: "Customer pays (optional)",
+    BUY_PRICE_OPTIONAL: "You pay (optional)",
+    CUSTOMER_PAYS: "What you charge customers",
+    YOU_PAY: "What you pay for it",
+    CURRENT_STOCK_OPTIONAL: "How many now? (optional)",
+    HOW_MANY_NOW: "How many do you have right now?",
+    SAVING: "Saving...",
+    EDIT_PRODUCT: "Edit Product",
+    SELL_PRICE: "Customer pays",
+    BUY_PRICE: "You pay",
+    CURRENT_STOCK: (qty: number, unit: string) => `Current stock: ${qty} ${unit}`,
+    USE_COUNT_TO_UPDATE: "Use Count Stock to update quantity",
+    SAVE_CHANGES: "Save Changes",
+    DELETE_PRODUCT: "Delete Product",
+    DELETE_PRODUCT_CONFIRM: (name: string) => `Delete "${name}"? Its history will be kept, but it will no longer appear in your lists.`,
+    FIRST_COUNT_DONE: "First Count Done!",
+    COUNT_SAVED: "Count Saved!",
+    STARTING_STOCK_RECORDED: "You've recorded your starting stock.",
+    GOT_IT: "Got it!",
+    DONE: "Done",
+    COUNT_PROGRESS: (done: number, total: number) => `${done} of ${total} counted`,
+    NOT_COUNTED_YET: "Not counted yet",
+    LAST_COUNT: (qty: number) => `Last: ${qty}`,
+    ERROR_SAVE_PRODUCT: "Could not save product",
+    ERROR_UPDATE_PRODUCT: "Could not update product",
+    ERROR_DELETE_PRODUCT: "Could not delete product",
+    ERROR_SAVE_COUNT: "Could not save count",
+    SHARING_UNAVAILABLE: "Sharing is not available on this device",
+    STOCK_ADDED: "Stock Added! ✓",
+    STOCK_ADDED_HINT: (qty: number, unit: string, name: string) => `${qty} ${unit} of ${name} recorded.`,
+    UNDO: "Undo",
+    WHAT_DID_YOU_BUY: "What did you buy?",
+    IN_STOCK: (qty: number, unit: string) => `${qty} ${unit} in stock`,
+    CURRENTLY_IN_STOCK: (qty: number, unit: string) => `Currently: ${qty} ${unit}`,
+    HOW_MANY_BOUGHT: "How many did you buy?",
+    TOTAL_COST: "Total cost?",
+    COST_MODE_TOTAL: "Total cost",
+    COST_MODE_EACH: "Per item",
+    COST_PER_ITEM: "Cost per item?",
+    COST_EACH: (amount: string) => `= R${amount} each`,
+    COST_TOTAL: (qty: number, each: string, total: string) => `${qty} × R${each} = R${total}`,
+    SAVE_STOCK_IN: "Save Stock-In",
+    ERROR_SAVE_STOCK: "Could not save stock",
+    ERROR_UNDO_STOCK: "Could not undo stock-in",
+    WEEKLY_SUMMARY: "Weekly Summary",
+    TOP_SELLERS: "🏆 Top Sellers",
+    SINCE_LAST_COUNT: "Since last count",
+    PRODUCT_DETAILS: "Product Details",
+    CURRENT_STOCK_ACTIVITY: "Current stock:",
+    SOLD_SINCE_LAST: "Sold since last count:",
+    PROFIT_LABEL: "Profit:",
+    LAST_COUNTS: (counts: number[]) => `Last counts: ${counts.join(' → ')}`,
+    NO_ACTIVITY: "No activity yet",
 
     // Language
     LANGUAGE_LABEL: "Language",
@@ -295,6 +437,20 @@ const STRINGS = {
     // Count screen
     COUNT_HEADER: "Unazo zingaki manje?",
     COUNT_HINT: "Bala okuseshelevini yakho",
+    COUNT_REVIEW_TITLE: "Buyekeza ukubala kwakho",
+    COUNT_REVIEW_HINT: "Hlola lezi zinombolo ngaphambi kokuthi zishintshe inzuzo yakho.",
+    COUNT_FIRST_VALUE: (name: string, qty: number) => `${name}: ukubala kokuqala ${qty}`,
+    COUNT_CHANGE_VALUE: (name: string, before: number, after: number) => `${name}: ${before} → ${after}`,
+    COUNT_REVIEW_BUTTON: (count: number) => `Buyekeza okubaliwe ${count}`,
+    COUNT_SAVE_BUTTON: "Gcina ukubala",
+    COUNT_GO_BACK: "Buyela emuva",
+    COUNT_UNDO: "Hlehlisa lokhu kubala",
+    COUNT_UNDO_CONFIRM: "Lokhu kususa ukubala kokugcina bese kubuyisela amanani esitoko angaphambilini.",
+    COUNT_UNDONE: "Ukubala kususiwe",
+    COUNT_UNDONE_HINT: "Amanani esitoko sangaphambilini abuyile.",
+    COUNT_UNDO_EXPIRED: "Lokhu kubala akusakwazi ukuhlehliswa.",
+    COUNT_REMINDER_TITLE: "Isikhathi sokubala futhi",
+    COUNT_REMINDER_HINT: "Sekuphele iviki. Bala okusele ukuze ubuyekeze inzuzo yakho.",
     FIRST_COUNT_HINT: "Lena yindawo yakho yokuqala — sizokqhathanisa nokubala okulandelayo.",
     
     // Results - Profit Explanation (Tier 3.1)
@@ -332,6 +488,7 @@ const STRINGS = {
     
     // Errors
     ERROR_GENERIC: "Kukhona okungahambanga kahle",
+    ERROR_TITLE: "Iphutha",
     ERROR_BACKUP: "Ayikwazanga ukwenza ibhekhi",
     ERROR_RESTORE: "Ayikwazanga ukubuyisela ibhekhi",
     DB_ERROR_TITLE: "Ayikwazi ukuvula idatha yesitolo sakho",
@@ -408,6 +565,8 @@ const STRINGS = {
     CREDIT_PAID_UP: "Bazobe sebekhokhile ngokugcwele",
     CREDIT_PAID_UP_TAG: "Ukhokhile",
     CREDIT_OWES_YOU_CHANGE: "Ubakweleta ushintshi",
+    CREDIT_CURRENT_OWES: (amount: string) => `Ukukweleta ${amount}`,
+    CREDIT_CURRENT_CHANGE: (amount: string) => `Umkweleta ushintshi ongu-${amount}`,
     CREDIT_NOT_IN_HAND: (amount: string) => `${amount} kulokhu usakukweletwa.`,
 
     // Expenses
@@ -476,6 +635,117 @@ const STRINGS = {
     CASHUP_HISTORY: "Ukubala kwemali kwakamuva",
     CASHUP_CANCEL: "Khansela",
     CASHUP_HOME_SHORTFALL: "bekungekho ekubaleni kwakho kokugcina. Thepha ukuze ubheke futhi.",
+    CASHUP_FLOAT: "imali yokuqala",
+    CASHUP_STATEMENT_BALANCED: "Imali yakho iyahambisana nalokho obekulindelwe uhlelo.",
+    CASHUP_STATEMENT_OVER: (amount: string) => `Unemali engu-${amount} ngaphezu kokulindelwe. Ukuthengisa noma inkokhelo kungenzeka akubhalwanga.`,
+    CASHUP_STATEMENT_SHORT_LARGE: (amount: string) => `Ushoda ngo-${amount}. Hlola isitoko esithengiwe, izindleko ezikhokhiwe, noma isikweletu esingabhalwanga.`,
+    CASHUP_STATEMENT_SHORT_SMALL: (amount: string) => `Ushoda ngo-${amount}. Lokhu kuvame ukuba ushintshi noma izindleko ezincane ezingabhalwanga.`,
+    FORMAT_WHEN: (ts: number) => new Date(ts).toLocaleString('zu-ZA', { dateStyle: 'medium', timeStyle: 'short' }),
+
+    // Shared app, product, and activity UI
+    APP_TAGLINE: "Yazi inzuzo yakho",
+    STARTING_APP: "I-ShopTrack iyaqala...",
+    HOW_TITLE: "📊 Isebenza kanjani",
+    HOW_STEP_1: "Faka imikhiqizo yakho (igama + amanani)",
+    HOW_STEP_2: "Bala isitoko sakho namuhla",
+    HOW_STEP_3: "Phinda ubale ezinsukwini ezimbalwa",
+    HOW_STEP_4: "Bona inzuzo yakho lapha! ⬇️",
+    HOW_NOTE: "Bala okusele, i-ShopTrack ibale okuthengisiwe nenzuzo yakho.",
+    YOUR_PROFIT: "Inzuzo Yakho",
+    PROFIT_EXPLAINER: "Kusekelwe esitokweni esithengisiwe kusukela ekubalweni kokugcina",
+    PRODUCTS_LABEL: "Imikhiqizo",
+    ITEMS_IN_STOCK: "Izinto Esitokweni",
+    COUNT_STOCK: "Bala Isitoko",
+    COUNT_TO_PROFIT: "Bala manje ukuze ubuyekeze inzuzo",
+    COUNT_BASELINE: "Ukubala kokuqala = indawo yokuqala",
+    ADD_STOCK: "Faka Isitoko",
+    WHEN_YOU_BUY: "Uma uthenga",
+    ADD_OR_EDIT: "Faka noma lungisa",
+    RECENT_ACTIVITY: "Okwakamuva",
+    THIS_WEEK: "Leli Viki",
+    RUNNING_LOW: "⚠️ Isitoko Siyaphela",
+    STOCK_LEFT: (name: string, qty: number) => `${name}: kusele ${qty}`,
+    WELCOME_TITLE: "👋 Siyakwamukela ku-ShopTrack!",
+    WELCOME_TEXT: "Faka okuthengisayo. Sizokukhombisa ukuthi wenza malini.",
+    WELCOME_HOW: "Qala ngemikhiqizo emithathu. Bala okusele njalo, i-ShopTrack ibale okuthengisiwe.",
+    ADD_FIRST_PRODUCT: "Faka Umkhiqizo Wokuqala",
+    YOUR_DATA: "Idatha Yakho",
+    SAVE_DATA: "Gcina ikhophi yedatha yesitolo",
+    SAVE_DATA_HINT: "Yigcine ku-WhatsApp noma ku-Google Drive",
+    RESTORE_DATA: "Buyisela ngebhekhi",
+    RESTORE_DATA_HINT: "Buyisa yonke idatha kufoni entsha",
+    BACKUP_DIALOG_TITLE: "Gcina ibhekhi ye-ShopTrack",
+    RESTORE_ACTION: "Buyisela",
+    BACK: "← Emuva",
+    CANCEL: "Khansela",
+    ADD: "+ Faka",
+    SEARCH_PRODUCTS: "Sesha imikhiqizo...",
+    NO_PRODUCTS: "Ayikho imikhiqizo okwamanje",
+    ADD_PRODUCT: "Faka Umkhiqizo",
+    READY_TO_TRACK: "Usukulungele ukulandelela",
+    READY_TO_TRACK_HINT: "Faka omunye umkhiqizo, noma uqale ukubala uma usukulungele.",
+    START_COUNTING: "Qala ukubala",
+    ADD_PRODUCTS_FIRST: "Faka imikhiqizo kuqala",
+    NO_PRODUCT_MATCH: (query: string) => `Awukho umkhiqizo ofana no-"${query}"`,
+    PRODUCT_META: (qty: number, unit: string, sell: number | null, buy: number | null) =>
+      `${qty} ${unit}${sell != null ? ` • Thengisa: R${sell}` : ''}${buy != null ? ` • Thenga: R${buy}` : ''}`,
+    CREDIT_HOME_STATUS: (owing: number, overdue: number, stale: number) =>
+      `${owing} ${owing === 1 ? 'umuntu' : 'abantu'}${overdue > 0 ? ` · ${overdue} sekwephuzile` : stale > 0 ? ` · ${stale} abakhokhanga kudala` : ''}`,
+    WHAT_DO_YOU_SELL: "Uthengisani?",
+    PRODUCT_EXAMPLE: "isib. Coca-Cola 500ml",
+    SELL_PRICE_OPTIONAL: "Ikhasimende likhokha (uyazikhethela)",
+    BUY_PRICE_OPTIONAL: "Wena ukhokha (uyazikhethela)",
+    CUSTOMER_PAYS: "Inani elikhokhwa ikhasimende",
+    YOU_PAY: "Inani olikhokhayo",
+    CURRENT_STOCK_OPTIONAL: "Zingaki manje? (uyazikhethela)",
+    HOW_MANY_NOW: "Unazo zingaki manje?",
+    SAVING: "Kuyagcinwa...",
+    EDIT_PRODUCT: "Lungisa Umkhiqizo",
+    SELL_PRICE: "Ikhasimende likhokha",
+    BUY_PRICE: "Wena ukhokha",
+    CURRENT_STOCK: (qty: number, unit: string) => `Isitoko samanje: ${qty} ${unit}`,
+    USE_COUNT_TO_UPDATE: "Sebenzisa Bala Isitoko ukushintsha inani",
+    SAVE_CHANGES: "Gcina Izinguquko",
+    DELETE_PRODUCT: "Susa Umkhiqizo",
+    DELETE_PRODUCT_CONFIRM: (name: string) => `Susa u-"${name}"? Umlando uzogcinwa kodwa ngeke usavela ohlwini.`,
+    FIRST_COUNT_DONE: "Ukubala Kokuqala Kuqediwe!",
+    COUNT_SAVED: "Ukubala Kugcinwe!",
+    STARTING_STOCK_RECORDED: "Isitoko sokuqala sigciniwe.",
+    GOT_IT: "Ngizwile!",
+    DONE: "Kwenziwe",
+    COUNT_PROGRESS: (done: number, total: number) => `Kubaliwe ${done} kokungu-${total}`,
+    NOT_COUNTED_YET: "Akukabalwa",
+    LAST_COUNT: (qty: number) => `Okokugcina: ${qty}`,
+    ERROR_SAVE_PRODUCT: "Ayikwazanga ukugcina umkhiqizo",
+    ERROR_UPDATE_PRODUCT: "Ayikwazanga ukulungisa umkhiqizo",
+    ERROR_DELETE_PRODUCT: "Ayikwazanga ukususa umkhiqizo",
+    ERROR_SAVE_COUNT: "Ayikwazanga ukugcina ukubala",
+    SHARING_UNAVAILABLE: "Ukwabelana akutholakali kule divayisi",
+    STOCK_ADDED: "Isitoko Sifakiwe! ✓",
+    STOCK_ADDED_HINT: (qty: number, unit: string, name: string) => `${qty} ${unit} we-${name} kugciniwe.`,
+    UNDO: "Hlehlisa",
+    WHAT_DID_YOU_BUY: "Uthenge ini?",
+    IN_STOCK: (qty: number, unit: string) => `${qty} ${unit} esitokweni`,
+    CURRENTLY_IN_STOCK: (qty: number, unit: string) => `Manje: ${qty} ${unit}`,
+    HOW_MANY_BOUGHT: "Uthenge ezingaki?",
+    TOTAL_COST: "Kubize malini konke?",
+    COST_MODE_TOTAL: "Inani lonke",
+    COST_MODE_EACH: "Ngayinye",
+    COST_PER_ITEM: "Kubiza malini ngakunye?",
+    COST_EACH: (amount: string) => `= R${amount} ngakunye`,
+    COST_TOTAL: (qty: number, each: string, total: string) => `${qty} × R${each} = R${total}`,
+    SAVE_STOCK_IN: "Gcina Isitoko",
+    ERROR_SAVE_STOCK: "Ayikwazanga ukugcina isitoko",
+    ERROR_UNDO_STOCK: "Ayikwazanga ukuhlehlisa isitoko",
+    WEEKLY_SUMMARY: "Isifinyezo Seviki",
+    TOP_SELLERS: "🏆 Okuthengiswa Kakhulu",
+    SINCE_LAST_COUNT: "Kusukela ekubalweni kokugcina",
+    PRODUCT_DETAILS: "Imininingwane Yemikhiqizo",
+    CURRENT_STOCK_ACTIVITY: "Isitoko samanje:",
+    SOLD_SINCE_LAST: "Okuthengisiwe kusukela ekubalweni:",
+    PROFIT_LABEL: "Inzuzo:",
+    LAST_COUNTS: (counts: number[]) => `Ukubala kokugcina: ${counts.join(' → ')}`,
+    NO_ACTIVITY: "Akukho okwenzekile okwamanje",
 
     // Language
     LANGUAGE_LABEL: "Ulimi",
@@ -505,6 +775,8 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastProfit, setLastProfit] = useState<number | null>(null);
+  const [latestCountSessionId, setLatestCountSessionId] = useState<number | null>(null);
+  const [latestCountAt, setLatestCountAt] = useState<number | null>(null);
   const [lang, setLang] = useState<Language>('en');
   const [restockPriority, setRestockPriority] = useState<RestockItem[]>([]);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -514,6 +786,29 @@ export default function App() {
   const [lastCashUp, setLastCashUp] = useState<CashUp | null>(null);
   const [dbError, setDbError] = useState<string | null>(null);
   const strings = t(lang);
+
+  // Entrance for the profit figure. Only opacity and transform are animated:
+  // animating height or width re-lays-out every frame and drops frames on the
+  // mid-range phones this runs on. useNativeDriver keeps it off the JS thread,
+  // so it stays smooth even while the database is still being read.
+  const profitFade = useRef(new Animated.Value(0)).current;
+  const profitRise = useRef(new Animated.Value(8)).current;
+
+  useEffect(() => {
+    if (lastProfit === null) return;
+    Animated.parallel([
+      Animated.timing(profitFade, {
+        toValue: 1,
+        duration: motion.base,
+        useNativeDriver: true,
+      }),
+      Animated.timing(profitRise, {
+        toValue: 0,
+        duration: motion.base,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [lastProfit, profitFade, profitRise]);
 
   // Initialize database and language on mount
   useEffect(() => {
@@ -593,9 +888,72 @@ export default function App() {
     const result = await loadProducts(db);
     setProducts(result);
 
-    // Tier 4.1: Calculate restock priority after loading products
-    await calculateRestockPriority(result);
+    // Refresh every Home signal derived from stock, including the most recent
+    // saved profit so it survives closing and reopening the app.
+    await Promise.all([
+      calculateRestockPriority(result),
+      refreshLatestProfit(result),
+    ]);
   }, []);
+
+  const refreshLatestProfit = async (productList: Product[]) => {
+    const latest = await getLatestCountSession(db);
+    setLatestCountSessionId(latest?.id ?? null);
+    setLatestCountAt(latest?.completed_at ?? null);
+    if (!latest) {
+      setLastProfit(null);
+      return;
+    }
+
+    const [productIds, movements] = await Promise.all([
+      loadCountSessionProductIds(db, latest.id),
+      loadMovements(db),
+    ]);
+    const counted = productList.filter(product => productIds.includes(product.id));
+    const hasPriorBaseline = movements.some(
+      movement => movement.type === 'COUNT' &&
+        movement.recorded_at < latest.completed_at &&
+        productIds.includes(movement.product_id)
+    );
+    if (!hasPriorBaseline) {
+      setLastProfit(null);
+      return;
+    }
+    const previousCountAt = movements
+      .filter(movement => movement.type === 'COUNT' && movement.recorded_at < latest.completed_at)
+      .reduce((mostRecent, movement) => Math.max(mostRecent, movement.recorded_at), 0);
+    const summary = calculatePeriodSummary(
+      counted.map(toCoreProduct),
+      movements,
+      previousCountAt > 0 ? previousCountAt + 1 : latest.completed_at,
+      latest.completed_at
+    );
+    setLastProfit(summary.total_estimated_profit);
+  };
+
+  const handleUndoLatestCount = () => {
+    if (latestCountSessionId == null) return;
+    Alert.alert(
+      strings.COUNT_UNDO,
+      strings.COUNT_UNDO_CONFIRM,
+      [
+        { text: strings.COUNT_GO_BACK, style: 'cancel' },
+        {
+          text: strings.COUNT_UNDO,
+          style: 'destructive',
+          onPress: async () => {
+            const undone = await undoCountSession(db, latestCountSessionId);
+            if (!undone) {
+              Alert.alert(strings.COUNT_UNDO_EXPIRED);
+              return;
+            }
+            await refreshProducts();
+            Alert.alert(strings.COUNT_UNDONE, strings.COUNT_UNDONE_HINT);
+          },
+        },
+      ]
+    );
+  };
 
   // Tier 4.1: Calculate restock priority
   const calculateRestockPriority = async (productList: Product[]) => {
@@ -652,21 +1010,7 @@ export default function App() {
   
   const handleBackup = async () => {
     try {
-      // Get all data
-      const productsData = await db.getAllAsync('SELECT * FROM products');
-      const movementsData = await db.getAllAsync('SELECT * FROM stock_movements');
-      const sessionsData = await db.getAllAsync('SELECT * FROM count_sessions');
-      
-      const backup = {
-        shoptrack_backup: true,
-        version: SCHEMA_VERSION,
-        created_at: new Date().toISOString(),
-        data: {
-          products: productsData,
-          stock_movements: movementsData,
-          count_sessions: sessionsData,
-        }
-      };
+      const backup = await createBackup(db);
       
       // Create filename with date
       const date = new Date().toISOString().split('T')[0];
@@ -681,15 +1025,15 @@ export default function App() {
       if (canShare) {
         await shareAsync(backupFile.uri, {
           mimeType: 'application/json',
-          dialogTitle: 'Save your ShopTrack backup',
+          dialogTitle: strings.BACKUP_DIALOG_TITLE,
         });
         Alert.alert(strings.BACKUP_SAVED, strings.BACKUP_HINT);
       } else {
-        Alert.alert('Error', 'Sharing is not available on this device');
+        Alert.alert(strings.ERROR_TITLE, strings.SHARING_UNAVAILABLE);
       }
     } catch (error) {
       console.error('Backup error:', error);
-      Alert.alert('Error', strings.ERROR_BACKUP);
+      Alert.alert(strings.ERROR_TITLE, strings.ERROR_BACKUP);
     }
   };
 
@@ -707,18 +1051,11 @@ export default function App() {
       const pickedFile = result.assets[0];
       const restoreFile = new File(pickedFile.uri);
       const content = await restoreFile.text();
-      const backup = JSON.parse(content);
-      
-      // Validate backup format
-      if (!backup.shoptrack_backup || !backup.data) {
+      let backup;
+      try {
+        backup = normaliseBackup(JSON.parse(content));
+      } catch {
         Alert.alert(strings.RESTORE_INVALID, strings.RESTORE_INVALID_HINT);
-        return;
-      }
-
-      // A backup written against an older schema no longer lines up with the
-      // current tables. Refuse it rather than restore a broken shop.
-      if (backup.version !== SCHEMA_VERSION) {
-        Alert.alert(strings.RESTORE_OLD_VERSION, strings.RESTORE_OLD_VERSION_HINT);
         return;
       }
 
@@ -727,51 +1064,24 @@ export default function App() {
         strings.RESTORE_CONFIRM,
         strings.RESTORE_CONFIRM_HINT,
         [
-          { text: 'Cancel', style: 'cancel' },
+          { text: strings.CANCEL, style: 'cancel' },
           { 
-            text: 'Restore', 
+            text: strings.RESTORE_ACTION,
             style: 'destructive',
             onPress: async () => {
               try {
-                // Clear existing data
-                await db.execAsync('DELETE FROM stock_movements');
-                await db.execAsync('DELETE FROM count_sessions');
-                await db.execAsync('DELETE FROM products');
-
-                // Restore products
-                for (const product of backup.data.products) {
-                  await db.runAsync(
-                    `INSERT INTO products (id, name, unit_label, buy_price, sell_price, current_qty, low_stock_threshold, is_active, created_at, updated_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [product.id, product.name, product.unit_label, product.buy_price, product.sell_price, product.current_qty, product.low_stock_threshold || 5, product.is_active ?? 1, product.created_at, product.updated_at]
-                  );
-                }
-
-                // Restore count sessions
-                for (const session of backup.data.count_sessions) {
-                  await db.runAsync(
-                    `INSERT INTO count_sessions (id, started_at, completed_at, products_counted, total_products)
-                     VALUES (?, ?, ?, ?, ?)`,
-                    [session.id, session.started_at, session.completed_at, session.products_counted, session.total_products]
-                  );
-                }
-
-                // Restore movements
-                for (const movement of backup.data.stock_movements) {
-                  await db.runAsync(
-                    `INSERT INTO stock_movements (id, product_id, type, quantity, buy_price_at_time, sell_price_at_time, total_cost, notes, session_id, recorded_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    [movement.id, movement.product_id, movement.type, movement.quantity, movement.buy_price_at_time ?? null, movement.sell_price_at_time ?? null, movement.total_cost ?? null, movement.notes ?? null, movement.session_id ?? null, movement.recorded_at]
-                  );
-                }
-
-                // Reload products
-                await refreshProducts();
+                await restoreBackup(db, backup);
+                await Promise.all([
+                  refreshProducts(),
+                  refreshCredit(),
+                  refreshExpenses(),
+                  refreshCashUp(),
+                ]);
                 
                 Alert.alert(strings.RESTORE_DONE, strings.RESTORE_DONE_HINT);
               } catch (error) {
                 console.error('Restore error:', error);
-                Alert.alert('Error', strings.ERROR_RESTORE);
+                Alert.alert(strings.ERROR_TITLE, strings.ERROR_RESTORE);
               }
             }
           }
@@ -779,7 +1089,7 @@ export default function App() {
       );
     } catch (error) {
       console.error('Restore error:', error);
-      Alert.alert('Error', strings.ERROR_RESTORE);
+      Alert.alert(strings.ERROR_TITLE, strings.ERROR_RESTORE);
     }
   };
 
@@ -790,7 +1100,7 @@ export default function App() {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color="#4CAF50" />
-        <Text style={styles.loadingText}>Starting ShopTrack...</Text>
+        <Text style={styles.loadingText}>{strings.STARTING_APP}</Text>
       </View>
     );
   }
@@ -823,40 +1133,46 @@ export default function App() {
         {/* Header */}
         <View style={styles.homeHeader}>
           <Text style={styles.appName}>ShopTrack</Text>
-          <Text style={styles.tagline}>Know your profit</Text>
+          <Text style={styles.tagline}>{strings.APP_TAGLINE}</Text>
         </View>
 
         <ScrollView style={styles.homeContent}>
           {/* How it works - show when no profit yet */}
           {lastProfit === null && products.length > 0 && (
             <View style={styles.howItWorksCard}>
-              <Text style={styles.howItWorksTitle}>📊 How it works</Text>
+              <Text style={styles.howItWorksTitle}>{strings.HOW_TITLE}</Text>
               <Text style={styles.howItWorksStep}>
-                <Text style={styles.stepNumber}>1.</Text> Add your products (name + prices)
-              </Text>
-              <Text style={styles.howItWorksStep}>
-                <Text style={styles.stepNumber}>2.</Text> Count your stock today
+                <Text style={styles.stepNumber}>1.</Text> {strings.HOW_STEP_1}
               </Text>
               <Text style={styles.howItWorksStep}>
-                <Text style={styles.stepNumber}>3.</Text> Count again in a few days
+                <Text style={styles.stepNumber}>2.</Text> {strings.HOW_STEP_2}
               </Text>
               <Text style={styles.howItWorksStep}>
-                <Text style={styles.stepNumber}>4.</Text> See your profit here! ⬇️
+                <Text style={styles.stepNumber}>3.</Text> {strings.HOW_STEP_3}
               </Text>
-              <Text style={styles.howItWorksNote}>
-                ShopTrack calculates profit by comparing your stock counts.
-                Less stock = items sold = profit earned.
+              <Text style={styles.howItWorksStep}>
+                <Text style={styles.stepNumber}>4.</Text> {strings.HOW_STEP_4}
               </Text>
+              <Text style={styles.howItWorksNote}>{strings.HOW_NOTE}</Text>
             </View>
           )}
 
-          {/* Profit display (if available) */}
+          {/* Profit display (if available).
+              The one animation in the app. This number is the answer the owner
+              opened ShopTrack for, so it arrives rather than just being there.
+              Nothing else animates -- a screen where everything moves has no
+              emphasis left to give. */}
           {lastProfit !== null && (
-            <View style={styles.profitCard}>
-              <Text style={styles.profitLabel}>Your Profit</Text>
+            <Animated.View
+              style={[
+                styles.profitCard,
+                { opacity: profitFade, transform: [{ translateY: profitRise }] },
+              ]}
+            >
+              <Text style={styles.profitLabel}>{strings.YOUR_PROFIT}</Text>
               <Text style={styles.profitValue}>R{lastProfit.toFixed(0)}</Text>
               <Text style={styles.profitExplainer}>
-                Based on stock sold since last count
+                {strings.PROFIT_EXPLAINER}
               </Text>
               {/* Profit counts goods that left the shelf, including those taken
                   on credit. Say so here rather than let the owner assume the
@@ -866,22 +1182,22 @@ export default function App() {
                   {strings.CREDIT_NOT_IN_HAND(`R${credit.total_outstanding.toFixed(2)}`)}
                 </Text>
               )}
-            </View>
+            </Animated.View>
           )}
 
           {/* Quick stats */}
-          <View style={styles.statsRow}>
+          {products.length > 0 && <View style={styles.statsRow}>
             <View style={styles.statBox}>
               <Text style={styles.statValue}>{products.length}</Text>
-              <Text style={styles.statLabel}>Products</Text>
+              <Text style={styles.statLabel}>{strings.PRODUCTS_LABEL}</Text>
             </View>
             <View style={styles.statBox}>
               <Text style={styles.statValue}>
                 {products.reduce((sum, p) => sum + p.current_qty, 0)}
               </Text>
-              <Text style={styles.statLabel}>Items in Stock</Text>
+              <Text style={styles.statLabel}>{strings.ITEMS_IN_STOCK}</Text>
             </View>
-          </View>
+          </View>}
 
           {/* Tier 3.3: Stock Value */}
           {products.some(p => p.current_qty > 0 && p.buy_price) && (
@@ -929,15 +1245,11 @@ export default function App() {
                 R{credit.total_outstanding.toFixed(2)}
               </Text>
               <Text style={styles.creditCardHint}>
-                {credit.customers_owing === 1
-                  ? '1 person'
-                  : `${credit.customers_owing} people`}
-                {/* A broken promise beats general silence as a signal. */}
-                {credit.customers_overdue > 0
-                  ? ` · ${credit.customers_overdue} late`
-                  : credit.customers_stale > 0
-                    ? ` · ${credit.customers_stale} not paid in a while`
-                    : ''}
+                {strings.CREDIT_HOME_STATUS(
+                  credit.customers_owing,
+                  credit.customers_overdue,
+                  credit.customers_stale
+                )}
               </Text>
             </TouchableOpacity>
           )}
@@ -961,67 +1273,86 @@ export default function App() {
             </View>
           )}
 
+          {latestCountAt != null && Date.now() - latestCountAt >= 7 * 24 * 60 * 60 * 1000 && (
+            <TouchableOpacity style={styles.countReminderCard} onPress={() => setScreen('count')}>
+              <Text style={styles.countReminderTitle}>{strings.COUNT_REMINDER_TITLE}</Text>
+              <Text style={styles.countReminderHint}>{strings.COUNT_REMINDER_HINT}</Text>
+            </TouchableOpacity>
+          )}
+
           {/* Main actions */}
-          <View style={styles.actionsContainer}>
-            <TouchableOpacity
-              style={styles.primaryAction}
+          {products.length > 0 && <View style={styles.actionsContainer}>
+            {/* Pressable, not TouchableOpacity: it gives a real Android ripple
+                and a pressed state, so a tap feels acknowledged on a cheap
+                phone where the screen itself lags. */}
+            <Pressable
+              style={({ pressed }) => [
+                styles.primaryAction,
+                pressed && styles.primaryActionPressed,
+              ]}
+              android_ripple={{ color: color.ripple }}
               onPress={() => setScreen('count')}
             >
               <Text style={styles.primaryActionIcon}>📦</Text>
-              <Text style={styles.primaryActionText}>Count Stock</Text>
+              <Text style={styles.primaryActionText}>{strings.COUNT_STOCK}</Text>
               <Text style={styles.primaryActionSubtext}>
                 {products.some(p => p.current_qty > 0) 
-                  ? 'Count now to see your profit'
-                  : 'First count = your baseline'
+                  ? strings.COUNT_TO_PROFIT
+                  : strings.COUNT_BASELINE
                 }
               </Text>
-            </TouchableOpacity>
+            </Pressable>
 
             <View style={styles.secondaryActions}>
-              <TouchableOpacity
-                style={styles.secondaryAction}
+              <Pressable
+                style={({ pressed }) => [styles.secondaryAction, pressed && styles.secondaryActionPressed]}
+                android_ripple={{ color: color.ripple, borderless: false }}
                 onPress={() => setScreen('stock_in')}
               >
                 <Text style={styles.secondaryActionIcon}>➕</Text>
-                <Text style={styles.secondaryActionText}>Add Stock</Text>
-                <Text style={styles.secondaryActionHint}>When you buy</Text>
-              </TouchableOpacity>
+                <Text style={styles.secondaryActionText}>{strings.ADD_STOCK}</Text>
+                <Text style={styles.secondaryActionHint}>{strings.WHEN_YOU_BUY}</Text>
+              </Pressable>
 
-              <TouchableOpacity
-                style={styles.secondaryAction}
+              <Pressable
+                style={({ pressed }) => [styles.secondaryAction, pressed && styles.secondaryActionPressed]}
+                android_ripple={{ color: color.ripple, borderless: false }}
                 onPress={() => setScreen('products')}
               >
                 <Text style={styles.secondaryActionIcon}>📋</Text>
-                <Text style={styles.secondaryActionText}>Products</Text>
-                <Text style={styles.secondaryActionHint}>Add or edit</Text>
-              </TouchableOpacity>
+                <Text style={styles.secondaryActionText}>{strings.PRODUCTS_LABEL}</Text>
+                <Text style={styles.secondaryActionHint}>{strings.ADD_OR_EDIT}</Text>
+              </Pressable>
 
-              <TouchableOpacity
-                style={styles.secondaryAction}
+              <Pressable
+                style={({ pressed }) => [styles.secondaryAction, pressed && styles.secondaryActionPressed]}
+                android_ripple={{ color: color.ripple, borderless: false }}
                 onPress={() => setScreen('credit')}
               >
                 <Text style={styles.secondaryActionIcon}>📖</Text>
                 <Text style={styles.secondaryActionText}>{strings.CREDIT_HOME_BUTTON}</Text>
                 <Text style={styles.secondaryActionHint}>{strings.CREDIT_HOME_HINT}</Text>
-              </TouchableOpacity>
+              </Pressable>
 
-              <TouchableOpacity
-                style={styles.secondaryAction}
+              <Pressable
+                style={({ pressed }) => [styles.secondaryAction, pressed && styles.secondaryActionPressed]}
+                android_ripple={{ color: color.ripple, borderless: false }}
                 onPress={() => setScreen('expenses')}
               >
                 <Text style={styles.secondaryActionIcon}>🧾</Text>
                 <Text style={styles.secondaryActionText}>{strings.EXPENSES_HOME_BUTTON}</Text>
                 <Text style={styles.secondaryActionHint}>{strings.EXPENSES_HOME_HINT}</Text>
-              </TouchableOpacity>
+              </Pressable>
 
-              <TouchableOpacity
-                style={styles.secondaryAction}
+              <Pressable
+                style={({ pressed }) => [styles.secondaryAction, pressed && styles.secondaryActionPressed]}
+                android_ripple={{ color: color.ripple, borderless: false }}
                 onPress={() => setScreen('cashup')}
               >
                 <Text style={styles.secondaryActionIcon}>💰</Text>
                 <Text style={styles.secondaryActionText}>{strings.CASHUP_HOME_BUTTON}</Text>
                 <Text style={styles.secondaryActionHint}>{strings.CASHUP_HOME_HINT}</Text>
-              </TouchableOpacity>
+              </Pressable>
             </View>
             
             {/* Activity buttons - only show if there's history */}
@@ -1032,7 +1363,7 @@ export default function App() {
                   onPress={() => setScreen('activity')}
                 >
                   <Text style={styles.insightButtonIcon}>📊</Text>
-                  <Text style={styles.insightButtonText}>Recent Activity</Text>
+                  <Text style={styles.insightButtonText}>{strings.RECENT_ACTIVITY}</Text>
                 </TouchableOpacity>
                 
                 <TouchableOpacity
@@ -1040,22 +1371,22 @@ export default function App() {
                   onPress={() => setScreen('weekly')}
                 >
                   <Text style={styles.insightButtonIcon}>📅</Text>
-                  <Text style={styles.insightButtonText}>This Week</Text>
+                  <Text style={styles.insightButtonText}>{strings.THIS_WEEK}</Text>
                 </TouchableOpacity>
               </View>
             )}
-          </View>
+          </View>}
 
           {/* Low Stock Warning */}
           {products.filter(p => p.current_qty > 0 && p.current_qty <= (p.low_stock_threshold || 5)).length > 0 && (
             <View style={styles.lowStockWarning}>
-              <Text style={styles.lowStockTitle}>⚠️ Running Low</Text>
+              <Text style={styles.lowStockTitle}>{strings.RUNNING_LOW}</Text>
               {products
                 .filter(p => p.current_qty > 0 && p.current_qty <= (p.low_stock_threshold || 5))
                 .slice(0, 3)
                 .map(p => (
                   <Text key={p.id} style={styles.lowStockItem}>
-                    {p.name}: {p.current_qty} left
+                    {strings.STOCK_LEFT(p.name, p.current_qty)}
                   </Text>
                 ))
               }
@@ -1065,27 +1396,30 @@ export default function App() {
           {/* Empty state prompt */}
           {products.length === 0 && (
             <View style={styles.emptyPrompt}>
-              <Text style={styles.emptyPromptTitle}>👋 Welcome to ShopTrack!</Text>
-              <Text style={styles.emptyPromptText}>
-                Track your shop's profit without complicated bookkeeping.
-              </Text>
-              <Text style={styles.emptyPromptHow}>
-                Just count your stock regularly — ShopTrack figures out how much you sold and calculates your profit.
-              </Text>
+              <Text style={styles.emptyPromptTitle}>{strings.WELCOME_TITLE}</Text>
+              <Text style={styles.emptyPromptText}>{strings.WELCOME_TEXT}</Text>
+              <Text style={styles.emptyPromptHow}>{strings.WELCOME_HOW}</Text>
               <TouchableOpacity
                 style={styles.emptyPromptButton}
                 onPress={() => setScreen('add_product')}
               >
                 <Text style={styles.emptyPromptButtonText}>
-                  Add Your First Product
+                  {strings.ADD_FIRST_PRODUCT}
                 </Text>
               </TouchableOpacity>
             </View>
           )}
 
+          {latestCountSessionId != null && latestCountAt != null &&
+            Date.now() - latestCountAt <= 60 * 60 * 1000 && (
+            <TouchableOpacity style={styles.homeUndoButton} onPress={handleUndoLatestCount}>
+              <Text style={styles.homeUndoText}>{strings.COUNT_UNDO}</Text>
+            </TouchableOpacity>
+          )}
+
           {/* Data Safety Section */}
           <View style={styles.dataSection}>
-            <Text style={styles.dataSectionTitle}>Your Data</Text>
+            <Text style={styles.dataSectionTitle}>{strings.YOUR_DATA}</Text>
             
             <TouchableOpacity
               style={styles.dataButton}
@@ -1093,8 +1427,8 @@ export default function App() {
             >
               <Text style={styles.dataButtonIcon}>💾</Text>
               <View style={styles.dataButtonContent}>
-                <Text style={styles.dataButtonText}>Save a copy of your shop data</Text>
-                <Text style={styles.dataButtonHint}>Keep it safe on WhatsApp or Google Drive</Text>
+                <Text style={styles.dataButtonText}>{strings.SAVE_DATA}</Text>
+                <Text style={styles.dataButtonHint}>{strings.SAVE_DATA_HINT}</Text>
               </View>
             </TouchableOpacity>
             
@@ -1104,8 +1438,8 @@ export default function App() {
             >
               <Text style={styles.dataButtonIcon}>📂</Text>
               <View style={styles.dataButtonContent}>
-                <Text style={styles.dataButtonText}>Restore from backup</Text>
-                <Text style={styles.dataButtonHint}>Get your data back on a new phone</Text>
+                <Text style={styles.dataButtonText}>{strings.RESTORE_DATA}</Text>
+                <Text style={styles.dataButtonHint}>{strings.RESTORE_DATA_HINT}</Text>
               </View>
             </TouchableOpacity>
             
@@ -1136,11 +1470,11 @@ export default function App() {
         
         <View style={styles.screenHeader}>
           <TouchableOpacity onPress={() => setScreen('home')}>
-            <Text style={styles.backButton}>← Back</Text>
+            <Text style={styles.backButton}>{strings.BACK}</Text>
           </TouchableOpacity>
-          <Text style={styles.screenTitle}>Products</Text>
+          <Text style={styles.screenTitle}>{strings.PRODUCTS_LABEL}</Text>
           <TouchableOpacity onPress={() => setScreen('add_product')}>
-            <Text style={styles.addButton}>+ Add</Text>
+            <Text style={styles.addButton}>{strings.ADD}</Text>
           </TouchableOpacity>
         </View>
 
@@ -1149,7 +1483,7 @@ export default function App() {
           <View style={styles.searchContainer}>
             <TextInput
               style={styles.searchInput}
-              placeholder="Search products..."
+              placeholder={strings.SEARCH_PRODUCTS}
               placeholderTextColor="#999"
               value={productSearch}
               onChangeText={setProductSearch}
@@ -1165,14 +1499,26 @@ export default function App() {
           </View>
         )}
 
+        {products.length > 0 && latestCountSessionId == null && (
+          <View style={styles.readyCard}>
+            <View style={styles.readyCardText}>
+              <Text style={styles.readyCardTitle}>{strings.READY_TO_TRACK}</Text>
+              <Text style={styles.readyCardHint}>{strings.READY_TO_TRACK_HINT}</Text>
+            </View>
+            <TouchableOpacity style={styles.readyCardButton} onPress={() => setScreen('count')}>
+              <Text style={styles.readyCardButtonText}>{strings.START_COUNTING}</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {products.length === 0 ? (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyStateText}>No products yet</Text>
+            <Text style={styles.emptyStateText}>{strings.NO_PRODUCTS}</Text>
             <TouchableOpacity
               style={styles.emptyStateButton}
               onPress={() => setScreen('add_product')}
             >
-              <Text style={styles.emptyStateButtonText}>Add Product</Text>
+              <Text style={styles.emptyStateButtonText}>{strings.ADD_PRODUCT}</Text>
             </TouchableOpacity>
           </View>
         ) : (
@@ -1191,16 +1537,19 @@ export default function App() {
                 <View style={styles.productItemContent}>
                   <Text style={styles.productName}>{product.name}</Text>
                   <Text style={styles.productMeta}>
-                    {product.current_qty} {product.unit_label}
-                    {product.sell_price ? ` • Sell: R${product.sell_price}` : ''}
-                    {product.buy_price ? ` • Buy: R${product.buy_price}` : ''}
+                    {strings.PRODUCT_META(
+                      product.current_qty,
+                      product.unit_label,
+                      product.sell_price,
+                      product.buy_price
+                    )}
                   </Text>
                 </View>
                 <Text style={styles.productEditHint}>›</Text>
               </TouchableOpacity>
             ))}
             {products.filter(p => p.name.toLowerCase().includes(productSearch.toLowerCase())).length === 0 && (
-              <Text style={styles.noSearchResults}>No products match "{productSearch}"</Text>
+              <Text style={styles.noSearchResults}>{strings.NO_PRODUCT_MATCH(productSearch)}</Text>
             )}
           </ScrollView>
         )}
@@ -1257,6 +1606,7 @@ export default function App() {
     return (
       <AddProductScreen
         db={db}
+        strings={strings}
         onSave={async () => {
           await refreshProducts();
           setScreen('products');
@@ -1273,6 +1623,7 @@ export default function App() {
     return (
       <EditProductScreen
         db={db}
+        strings={strings}
         product={editingProduct}
         onSave={async () => {
           await refreshProducts();
@@ -1302,18 +1653,18 @@ export default function App() {
           <StatusBar style="dark" />
           <View style={styles.screenHeader}>
             <TouchableOpacity onPress={() => setScreen('home')}>
-              <Text style={styles.backButton}>← Back</Text>
+              <Text style={styles.backButton}>{strings.BACK}</Text>
             </TouchableOpacity>
-            <Text style={styles.screenTitle}>Count Stock</Text>
+            <Text style={styles.screenTitle}>{strings.COUNT_STOCK}</Text>
             <View style={{ width: 50 }} />
           </View>
           <View style={styles.emptyState}>
-            <Text style={styles.emptyStateText}>Add products first</Text>
+            <Text style={styles.emptyStateText}>{strings.ADD_PRODUCTS_FIRST}</Text>
             <TouchableOpacity
               style={styles.emptyStateButton}
               onPress={() => setScreen('add_product')}
             >
-              <Text style={styles.emptyStateButtonText}>Add Product</Text>
+              <Text style={styles.emptyStateButtonText}>{strings.ADD_PRODUCT}</Text>
             </TouchableOpacity>
           </View>
         </SafeAreaView>
@@ -1325,8 +1676,12 @@ export default function App() {
         products={products}
         db={db}
         strings={strings}
-        onComplete={(profit: number) => {
+        onComplete={(profit: number | null) => {
           setLastProfit(profit);
+          refreshProducts();
+          setScreen('home');
+        }}
+        onUndo={() => {
           refreshProducts();
           setScreen('home');
         }}
@@ -1345,18 +1700,18 @@ export default function App() {
           <StatusBar style="dark" />
           <View style={styles.screenHeader}>
             <TouchableOpacity onPress={() => setScreen('home')}>
-              <Text style={styles.backButton}>← Back</Text>
+              <Text style={styles.backButton}>{strings.BACK}</Text>
             </TouchableOpacity>
-            <Text style={styles.screenTitle}>Add Stock</Text>
+            <Text style={styles.screenTitle}>{strings.ADD_STOCK}</Text>
             <View style={{ width: 50 }} />
           </View>
           <View style={styles.emptyState}>
-            <Text style={styles.emptyStateText}>Add products first</Text>
+            <Text style={styles.emptyStateText}>{strings.ADD_PRODUCTS_FIRST}</Text>
             <TouchableOpacity
               style={styles.emptyStateButton}
               onPress={() => setScreen('add_product')}
             >
-              <Text style={styles.emptyStateButtonText}>Add Product</Text>
+              <Text style={styles.emptyStateButtonText}>{strings.ADD_PRODUCT}</Text>
             </TouchableOpacity>
           </View>
         </SafeAreaView>
@@ -1367,6 +1722,7 @@ export default function App() {
       <StockInScreen
         products={products}
         db={db}
+        strings={strings}
         onComplete={() => {
           refreshProducts();
           setScreen('home');
@@ -1413,10 +1769,12 @@ export default function App() {
 
 function AddProductScreen({ 
   db,
+  strings,
   onSave, 
   onCancel 
 }: { 
   db: SQLite.SQLiteDatabase;
+  strings: typeof STRINGS.en;
   onSave: () => void; 
   onCancel: () => void;
 }) {
@@ -1432,35 +1790,17 @@ function AddProductScreen({
     setSaving(true);
     try {
       const qty = quantity ? parseInt(quantity, 10) : 0;
-      const now = Date.now();
-      const sell = sellPrice ? parseFloat(sellPrice) : null;
-
-      // Insert product with initial quantity
-      const result = await db.runAsync(
-        'INSERT INTO products (name, sell_price, buy_price, current_qty, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [
-          name.trim(),
-          sell,
-          buyPrice ? parseFloat(buyPrice) : null,
-          qty,
-          now,
-          now
-        ]
-      );
-
-      // If quantity was provided, record it as the opening count
-      if (qty > 0) {
-        await db.runAsync(
-          `INSERT INTO stock_movements (product_id, type, quantity, sell_price_at_time, recorded_at)
-           VALUES (?, 'COUNT', ?, ?, ?)`,
-          [result.lastInsertRowId, qty, sell, now]
-        );
-      }
+      await addProduct(db, {
+        name,
+        sellPrice: sellPrice ? parseFloat(sellPrice) : null,
+        buyPrice: buyPrice ? parseFloat(buyPrice) : null,
+        quantity: qty,
+      });
 
       onSave();
     } catch (error) {
       console.error('Save error:', error);
-      Alert.alert('Error', 'Could not save product');
+      Alert.alert(strings.ERROR_TITLE, strings.ERROR_SAVE_PRODUCT);
       setSaving(false);
     }
   };
@@ -1471,24 +1811,24 @@ function AddProductScreen({
       
       <View style={styles.screenHeader}>
         <TouchableOpacity onPress={onCancel}>
-          <Text style={styles.backButton}>Cancel</Text>
+          <Text style={styles.backButton}>{strings.CANCEL}</Text>
         </TouchableOpacity>
-        <Text style={styles.screenTitle}>Add Product</Text>
+        <Text style={styles.screenTitle}>{strings.ADD_PRODUCT}</Text>
         <View style={{ width: 50 }} />
       </View>
 
       <ScrollView style={styles.formContainer}>
-        <Text style={styles.inputLabel}>Product Name *</Text>
+        <Text style={styles.inputLabel}>{strings.WHAT_DO_YOU_SELL}</Text>
         <TextInput
           style={styles.textInput}
-          placeholder="e.g., Coca-Cola 500ml"
+          placeholder={strings.PRODUCT_EXAMPLE}
           placeholderTextColor="#999"
           value={name}
           onChangeText={setName}
           autoFocus
         />
 
-        <Text style={styles.inputLabel}>Sell Price (optional)</Text>
+        <Text style={styles.inputLabel}>{strings.SELL_PRICE_OPTIONAL}</Text>
         <View style={styles.priceInputRow}>
           <Text style={styles.currencyPrefix}>R</Text>
           <TextInput
@@ -1500,9 +1840,9 @@ function AddProductScreen({
             onChangeText={setSellPrice}
           />
         </View>
-        <Text style={styles.inputHint}>What you charge customers</Text>
+        <Text style={styles.inputHint}>{strings.CUSTOMER_PAYS}</Text>
 
-        <Text style={styles.inputLabel}>Buy Price (optional)</Text>
+        <Text style={styles.inputLabel}>{strings.BUY_PRICE_OPTIONAL}</Text>
         <View style={styles.priceInputRow}>
           <Text style={styles.currencyPrefix}>R</Text>
           <TextInput
@@ -1514,9 +1854,9 @@ function AddProductScreen({
             onChangeText={setBuyPrice}
           />
         </View>
-        <Text style={styles.inputHint}>What you pay for it</Text>
+        <Text style={styles.inputHint}>{strings.YOU_PAY}</Text>
 
-        <Text style={styles.inputLabel}>Current Stock (optional)</Text>
+        <Text style={styles.inputLabel}>{strings.CURRENT_STOCK_OPTIONAL}</Text>
         <TextInput
           style={styles.textInput}
           placeholder="0"
@@ -1525,7 +1865,7 @@ function AddProductScreen({
           value={quantity}
           onChangeText={setQuantity}
         />
-        <Text style={styles.inputHint}>How many do you have right now?</Text>
+        <Text style={styles.inputHint}>{strings.HOW_MANY_NOW}</Text>
 
         <TouchableOpacity
           style={[
@@ -1536,7 +1876,7 @@ function AddProductScreen({
           disabled={!name.trim() || saving}
         >
           <Text style={styles.saveButtonText}>
-            {saving ? 'Saving...' : 'Add Product'}
+            {saving ? strings.SAVING : strings.ADD_PRODUCT}
           </Text>
         </TouchableOpacity>
       </ScrollView>
@@ -1550,12 +1890,14 @@ function AddProductScreen({
 
 function EditProductScreen({ 
   db,
+  strings,
   product,
   onSave, 
   onDelete,
   onCancel 
 }: { 
   db: SQLite.SQLiteDatabase;
+  strings: typeof STRINGS.en;
   product: Product;
   onSave: () => void; 
   onDelete: () => void;
@@ -1571,45 +1913,37 @@ function EditProductScreen({
     
     setSaving(true);
     try {
-      await db.runAsync(
-        'UPDATE products SET name = ?, sell_price = ?, buy_price = ?, updated_at = ? WHERE id = ?',
-        [
-          name.trim(),
-          sellPrice ? parseFloat(sellPrice) : null,
-          buyPrice ? parseFloat(buyPrice) : null,
-          Date.now(),
-          product.id
-        ]
-      );
+      await updateProduct(db, product.id, {
+        name,
+        sellPrice: sellPrice ? parseFloat(sellPrice) : null,
+        buyPrice: buyPrice ? parseFloat(buyPrice) : null,
+      });
       
       onSave();
     } catch (error) {
       console.error('Update error:', error);
-      Alert.alert('Error', 'Could not update product');
+      Alert.alert(strings.ERROR_TITLE, strings.ERROR_UPDATE_PRODUCT);
       setSaving(false);
     }
   };
 
   const handleDelete = () => {
     Alert.alert(
-      'Delete Product',
-      `Are you sure you want to delete "${product.name}"? This will also remove all its stock history.`,
+      strings.DELETE_PRODUCT,
+      strings.DELETE_PRODUCT_CONFIRM(product.name),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: strings.CANCEL, style: 'cancel' },
         { 
-          text: 'Delete', 
+          text: strings.DELETE_PRODUCT,
           style: 'destructive',
           onPress: async () => {
             try {
               // Soft delete - set is_active to 0
-              await db.runAsync(
-                'UPDATE products SET is_active = 0, updated_at = ? WHERE id = ?',
-                [Date.now(), product.id]
-              );
+              await deactivateProduct(db, product.id);
               onDelete();
             } catch (error) {
               console.error('Delete error:', error);
-              Alert.alert('Error', 'Could not delete product');
+              Alert.alert(strings.ERROR_TITLE, strings.ERROR_DELETE_PRODUCT);
             }
           }
         },
@@ -1623,23 +1957,23 @@ function EditProductScreen({
       
       <View style={styles.screenHeader}>
         <TouchableOpacity onPress={onCancel}>
-          <Text style={styles.backButton}>Cancel</Text>
+          <Text style={styles.backButton}>{strings.CANCEL}</Text>
         </TouchableOpacity>
-        <Text style={styles.screenTitle}>Edit Product</Text>
+        <Text style={styles.screenTitle}>{strings.EDIT_PRODUCT}</Text>
         <View style={{ width: 50 }} />
       </View>
 
       <ScrollView style={styles.formContainer}>
-        <Text style={styles.inputLabel}>Product Name *</Text>
+        <Text style={styles.inputLabel}>{strings.WHAT_DO_YOU_SELL}</Text>
         <TextInput
           style={styles.textInput}
-          placeholder="e.g., Coca-Cola 500ml"
+          placeholder={strings.PRODUCT_EXAMPLE}
           placeholderTextColor="#999"
           value={name}
           onChangeText={setName}
         />
 
-        <Text style={styles.inputLabel}>Sell Price</Text>
+        <Text style={styles.inputLabel}>{strings.SELL_PRICE}</Text>
         <View style={styles.priceInputRow}>
           <Text style={styles.currencyPrefix}>R</Text>
           <TextInput
@@ -1651,9 +1985,9 @@ function EditProductScreen({
             onChangeText={setSellPrice}
           />
         </View>
-        <Text style={styles.inputHint}>What you charge customers</Text>
+        <Text style={styles.inputHint}>{strings.CUSTOMER_PAYS}</Text>
 
-        <Text style={styles.inputLabel}>Buy Price</Text>
+        <Text style={styles.inputLabel}>{strings.BUY_PRICE}</Text>
         <View style={styles.priceInputRow}>
           <Text style={styles.currencyPrefix}>R</Text>
           <TextInput
@@ -1665,14 +1999,14 @@ function EditProductScreen({
             onChangeText={setBuyPrice}
           />
         </View>
-        <Text style={styles.inputHint}>What you pay for it</Text>
+        <Text style={styles.inputHint}>{strings.YOU_PAY}</Text>
 
         <View style={styles.editProductInfo}>
           <Text style={styles.editProductInfoText}>
-            Current stock: {product.current_qty} {product.unit_label}
+            {strings.CURRENT_STOCK(product.current_qty, product.unit_label)}
           </Text>
           <Text style={styles.editProductInfoHint}>
-            Use "Count Stock" to update quantity
+            {strings.USE_COUNT_TO_UPDATE}
           </Text>
         </View>
 
@@ -1685,7 +2019,7 @@ function EditProductScreen({
           disabled={!name.trim() || saving}
         >
           <Text style={styles.saveButtonText}>
-            {saving ? 'Saving...' : 'Save Changes'}
+            {saving ? strings.SAVING : strings.SAVE_CHANGES}
           </Text>
         </TouchableOpacity>
 
@@ -1693,7 +2027,7 @@ function EditProductScreen({
           style={styles.deleteButton}
           onPress={handleDelete}
         >
-          <Text style={styles.deleteButtonText}>Delete Product</Text>
+          <Text style={styles.deleteButtonText}>{strings.DELETE_PRODUCT}</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>
@@ -1708,22 +2042,32 @@ function CountScreen({
   products, 
   db,
   strings,
-  onComplete, 
+  onComplete,
+  onUndo,
   onCancel 
 }: { 
   products: Product[];
   db: SQLite.SQLiteDatabase;
   strings: typeof STRINGS.en;
-  onComplete: (profit: number) => void;
+  onComplete: (profit: number | null) => void;
+  onUndo: () => void;
   onCancel: () => void;
 }) {
   const [counts, setCounts] = useState<Record<number, string>>({});
-  const [step, setStep] = useState<'counting' | 'results'>('counting');
+  const [step, setStep] = useState<'counting' | 'review' | 'results'>('counting');
   const [saving, setSaving] = useState(false);
   const [profit, setProfit] = useState(0);
+  const [savedSessionId, setSavedSessionId] = useState<number | null>(null);
+  const [previouslyCounted, setPreviouslyCounted] = useState<Set<number>>(new Set());
 
   const countedCount = Object.entries(counts).filter(([_, v]) => v !== '').length;
-  const isFirstCount = products.every(p => p.current_qty === 0);
+  const countedEntries = products.flatMap(product => {
+    const value = counts[product.id];
+    if (value == null || value === '') return [];
+    return [{ product, quantity: Number(value) }];
+  });
+  const isFirstCount = countedEntries.length > 0 &&
+    countedEntries.every(entry => !previouslyCounted.has(entry.product.id));
   
   // Calculate what changed for the results screen (Tier 3.1)
   const [totalSold, setTotalSold] = useState(0);
@@ -1750,6 +2094,7 @@ function CountScreen({
           'SELECT COUNT(*) as count FROM stock_movements WHERE type = \'STOCK_IN\''
         );
         setHasAnyStockIns((stockInResult[0]?.count || 0) > 0);
+        setPreviouslyCounted(new Set(await loadPreviouslyCountedProductIds(db)));
       } catch (error) {
         console.error('Load confidence data error:', error);
       }
@@ -1758,31 +2103,16 @@ function CountScreen({
   }, [db]);
 
   const handleSave = async () => {
+    if (countedEntries.length === 0) return;
     setSaving(true);
 
     try {
       const now = Date.now();
-
-      // Create count session
-      const sessionResult = await db.runAsync(
-        'INSERT INTO count_sessions (started_at, products_counted, total_products) VALUES (?, ?, ?)',
-        [now, countedCount, products.length]
-      );
-      const sessionId = sessionResult.lastInsertRowId;
-
       let didStockIncrease = false;
       let hasUnusualChange = false;
-      const counted: Product[] = [];
 
-      // Write the counts first, then let the engine read them back. The
-      // engine is the only thing that decides what "sold" and "profit" mean.
-      for (const product of products) {
-        const countStr = counts[product.id];
-        if (countStr === '' || countStr === undefined) continue;
-
-        const newQty = parseInt(countStr) || 0;
-        const oldQty = product.current_qty;
-        const change = oldQty - newQty;
+      for (const entry of countedEntries) {
+        const change = entry.product.current_qty - entry.quantity;
 
         // Track if stock went up (restock without using Stock-In)
         if (change < 0) {
@@ -1790,30 +2120,24 @@ function CountScreen({
         }
 
         // Track unusual changes (Tier 3.1)
-        if (oldQty > 0 && Math.abs(change) > UNUSUAL_THRESHOLD) {
+        if (previouslyCounted.has(entry.product.id) && Math.abs(change) > UNUSUAL_THRESHOLD) {
           hasUnusualChange = true;
         }
-
-        await recordCount(db, product, newQty, sessionId, now);
-        counted.push(product);
       }
 
-      // Complete the session
-      await db.runAsync(
-        'UPDATE count_sessions SET completed_at = ? WHERE id = ?',
-        [now, sessionId]
-      );
+      const saved = await saveCountSession(db, countedEntries, products.length, now);
+      setSavedSessionId(saved.sessionId);
 
       // Profit since the previous count, per the engine.
-      const movements = await loadMovements(db, now - THIRTY_DAYS_MS);
+      const movements = await loadMovements(db);
       const previousCountAt = movements
         .filter(m => m.type === 'COUNT' && m.recorded_at < now)
         .reduce((latest, m) => Math.max(latest, m.recorded_at), 0);
 
       const summary = calculatePeriodSummary(
-        counted.map(toCoreProduct),
+        countedEntries.map(entry => toCoreProduct(entry.product)),
         movements,
-        previousCountAt > 0 ? previousCountAt + 1 : now - THIRTY_DAYS_MS,
+        previousCountAt > 0 ? previousCountAt + 1 : now,
         now
       );
 
@@ -1825,7 +2149,26 @@ function CountScreen({
       setStep('results');
     } catch (error) {
       console.error('Save error:', error);
-      Alert.alert('Error', 'Could not save count');
+      Alert.alert(strings.ERROR_TITLE, strings.ERROR_SAVE_COUNT);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleUndo = async () => {
+    if (savedSessionId == null) return;
+    setSaving(true);
+    try {
+      const undone = await undoCountSession(db, savedSessionId);
+      if (!undone) {
+        Alert.alert(strings.COUNT_UNDO_EXPIRED);
+        return;
+      }
+      Alert.alert(strings.COUNT_UNDONE, strings.COUNT_UNDONE_HINT);
+      onUndo();
+    } catch (error) {
+      console.error('Undo count error:', error);
+      Alert.alert(strings.ERROR_TITLE, strings.ERROR_GENERIC);
     } finally {
       setSaving(false);
     }
@@ -1840,13 +2183,13 @@ function CountScreen({
         <View style={styles.resultsContainer}>
           <Text style={styles.resultsIcon}>{isFirstCount ? '🎉' : '✓'}</Text>
           <Text style={styles.resultsTitle}>
-            {isFirstCount ? 'First Count Done!' : 'Count Saved!'}
+            {isFirstCount ? strings.FIRST_COUNT_DONE : strings.COUNT_SAVED}
           </Text>
           
           {isFirstCount ? (
             <>
               <Text style={styles.resultsSubtitle}>
-                You've recorded your starting stock.
+                {strings.STARTING_STOCK_RECORDED}
               </Text>
               <View style={styles.nextStepBox}>
                 <Text style={styles.nextStepText}>
@@ -1860,7 +2203,7 @@ function CountScreen({
               {totalSold > 0 && (
                 <>
                   <View style={styles.profitResultCard}>
-                    <Text style={styles.profitResultLabel}>Your Profit</Text>
+                    <Text style={styles.profitResultLabel}>{strings.YOUR_PROFIT}</Text>
                     <Text style={styles.profitResultValue}>R{profit.toFixed(0)}</Text>
                     {/* Tier 3.2: Confidence signals */}
                     <Text style={styles.confidenceCount}>
@@ -1910,10 +2253,63 @@ function CountScreen({
           
           <TouchableOpacity
             style={styles.doneButton}
-            onPress={() => onComplete(profit)}
+            onPress={() => onComplete(isFirstCount ? null : profit)}
           >
             <Text style={styles.doneButtonText}>
-              {isFirstCount ? 'Got it!' : 'Done'}
+              {isFirstCount ? strings.GOT_IT : strings.DONE}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.undoButton}
+            onPress={handleUndo}
+            disabled={saving}
+          >
+            <Text style={styles.undoButtonText}>{strings.COUNT_UNDO}</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (step === 'review') {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar style="dark" />
+        <View style={styles.screenHeader}>
+          <TouchableOpacity onPress={() => setStep('counting')}>
+            <Text style={styles.backButton}>{strings.COUNT_GO_BACK}</Text>
+          </TouchableOpacity>
+          <Text style={styles.screenTitle}>{strings.COUNT_REVIEW_TITLE}</Text>
+          <View style={{ width: 50 }} />
+        </View>
+        <Text style={styles.reviewHint}>{strings.COUNT_REVIEW_HINT}</Text>
+        <ScrollView style={styles.countList}>
+          {countedEntries.map(({ product, quantity }) => {
+            const first = !previouslyCounted.has(product.id);
+            const change = quantity - product.current_qty;
+            return (
+              <View key={product.id} style={styles.reviewItem}>
+                <Text style={styles.reviewItemName}>{product.name}</Text>
+                <Text style={styles.reviewItemValue}>
+                  {first
+                    ? strings.COUNT_FIRST_VALUE(product.name, quantity)
+                    : strings.COUNT_CHANGE_VALUE(product.name, product.current_qty, quantity)}
+                </Text>
+                {!first && Math.abs(change) > UNUSUAL_THRESHOLD && (
+                  <Text style={styles.reviewWarning}>{strings.UNUSUAL_CHANGE}</Text>
+                )}
+              </View>
+            );
+          })}
+        </ScrollView>
+        <View style={styles.countBottomBar}>
+          <TouchableOpacity
+            style={[styles.saveCountButton, saving && styles.saveButtonDisabled]}
+            onPress={handleSave}
+            disabled={saving}
+          >
+            <Text style={styles.saveButtonText}>
+              {saving ? strings.SAVING : strings.COUNT_SAVE_BUTTON}
             </Text>
           </TouchableOpacity>
         </View>
@@ -1928,9 +2324,9 @@ function CountScreen({
       
       <View style={styles.screenHeader}>
         <TouchableOpacity onPress={onCancel}>
-          <Text style={styles.backButton}>Cancel</Text>
+          <Text style={styles.backButton}>{strings.CANCEL}</Text>
         </TouchableOpacity>
-        <Text style={styles.screenTitle}>Count Stock</Text>
+        <Text style={styles.screenTitle}>{strings.COUNT_STOCK}</Text>
         <View style={{ width: 50 }} />
       </View>
 
@@ -1940,7 +2336,7 @@ function CountScreen({
       </View>
 
       <Text style={styles.countProgress}>
-        {countedCount} of {products.length} counted
+        {strings.COUNT_PROGRESS(countedCount, products.length)}
       </Text>
 
       <ScrollView style={styles.countList}>
@@ -1949,9 +2345,9 @@ function CountScreen({
             <View style={styles.countItemInfo}>
               <Text style={styles.countItemName}>{product.name}</Text>
               <Text style={styles.countItemPrev}>
-                {product.current_qty === 0 
-                  ? 'Not counted yet' 
-                  : `Last: ${product.current_qty}`}
+                {previouslyCounted.has(product.id)
+                  ? strings.LAST_COUNT(product.current_qty)
+                  : strings.NOT_COUNTED_YET}
               </Text>
             </View>
             <TextInput
@@ -1961,7 +2357,7 @@ function CountScreen({
               keyboardType="number-pad"
               value={counts[product.id] || ''}
               onChangeText={(val) => {
-                setCounts(prev => ({ ...prev, [product.id]: val }));
+                setCounts(prev => ({ ...prev, [product.id]: val.replace(/[^0-9]/g, '') }));
               }}
             />
           </View>
@@ -1974,11 +2370,11 @@ function CountScreen({
             styles.saveCountButton,
             (countedCount === 0 || saving) && styles.saveButtonDisabled,
           ]}
-          onPress={handleSave}
+          onPress={() => setStep('review')}
           disabled={countedCount === 0 || saving}
         >
           <Text style={styles.saveButtonText}>
-            {saving ? 'Saving...' : `Save Count (${countedCount})`}
+            {strings.COUNT_REVIEW_BUTTON(countedCount)}
           </Text>
         </TouchableOpacity>
       </View>
@@ -1993,21 +2389,26 @@ function CountScreen({
 function StockInScreen({ 
   products, 
   db,
+  strings,
   onComplete, 
   onCancel 
 }: { 
   products: Product[];
   db: SQLite.SQLiteDatabase;
+  strings: typeof STRINGS.en;
   onComplete: () => void;
   onCancel: () => void;
 }) {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [quantity, setQuantity] = useState('');
   const [cost, setCost] = useState('');
+  const [costMode, setCostMode] = useState<'total' | 'each'>('total');
+  const [productSearch, setProductSearch] = useState('');
   const [saving, setSaving] = useState(false);
 
   const qty = parseInt(quantity) || 0;
-  const totalCost = parseFloat(cost) || 0;
+  const enteredCost = parseFloat(cost) || 0;
+  const totalCost = costMode === 'each' ? enteredCost * qty : enteredCost;
   const canSave = selectedProduct && qty > 0 && totalCost > 0;
 
   const handleSave = async () => {
@@ -2015,16 +2416,32 @@ function StockInScreen({
     
     setSaving(true);
     try {
-      await recordStockIn(db, selectedProduct, qty, totalCost);
+      const movementId = await recordStockIn(db, selectedProduct, qty, totalCost);
 
       Alert.alert(
-        'Stock Added! ✓',
-        `${qty} ${selectedProduct.unit_label} of ${selectedProduct.name} recorded.`,
-        [{ text: 'Done', onPress: onComplete }]
+        strings.STOCK_ADDED,
+        strings.STOCK_ADDED_HINT(qty, selectedProduct.unit_label, selectedProduct.name),
+        [
+          {
+            text: strings.UNDO,
+            style: 'destructive',
+            onPress: async () => {
+              try {
+                await undoStockIn(db, movementId);
+                onComplete();
+              } catch (error) {
+                console.error('Undo stock-in error:', error);
+                Alert.alert(strings.ERROR_TITLE, strings.ERROR_UNDO_STOCK);
+                setSaving(false);
+              }
+            },
+          },
+          { text: strings.DONE, onPress: onComplete },
+        ]
       );
     } catch (error) {
       console.error('Save error:', error);
-      Alert.alert('Error', 'Could not save');
+      Alert.alert(strings.ERROR_TITLE, strings.ERROR_SAVE_STOCK);
       setSaving(false);
     }
   };
@@ -2037,27 +2454,58 @@ function StockInScreen({
         
         <View style={styles.screenHeader}>
           <TouchableOpacity onPress={onCancel}>
-            <Text style={styles.backButton}>Cancel</Text>
+            <Text style={styles.backButton}>{strings.CANCEL}</Text>
           </TouchableOpacity>
-          <Text style={styles.screenTitle}>Add Stock</Text>
+          <Text style={styles.screenTitle}>{strings.ADD_STOCK}</Text>
           <View style={{ width: 50 }} />
         </View>
 
-        <Text style={styles.sectionTitle}>What did you buy?</Text>
+        <Text style={styles.sectionTitle}>{strings.WHAT_DID_YOU_BUY}</Text>
+
+        <View style={styles.searchContainer}>
+          <TextInput
+            style={styles.searchInput}
+            placeholder={strings.SEARCH_PRODUCTS}
+            placeholderTextColor="#999"
+            value={productSearch}
+            onChangeText={setProductSearch}
+          />
+          {productSearch.length > 0 && (
+            <TouchableOpacity style={styles.searchClear} onPress={() => setProductSearch('')}>
+              <Text style={styles.searchClearText}>✕</Text>
+            </TouchableOpacity>
+          )}
+        </View>
 
         <ScrollView style={styles.productList}>
-          {products.map((product) => (
+          {products
+            .filter(product => product.name.toLowerCase().includes(productSearch.toLowerCase()))
+            .map((product) => (
             <TouchableOpacity
               key={product.id}
               style={styles.productSelectItem}
-              onPress={() => setSelectedProduct(product)}
+              onPress={() => {
+                setSelectedProduct(product);
+                if (product.buy_price != null) {
+                  setCostMode('each');
+                  setCost(product.buy_price.toFixed(2));
+                } else {
+                  setCostMode('total');
+                  setCost('');
+                }
+              }}
             >
               <Text style={styles.productName}>{product.name}</Text>
               <Text style={styles.productMeta}>
-                {product.current_qty} {product.unit_label} in stock
+                {strings.IN_STOCK(product.current_qty, product.unit_label)}
               </Text>
             </TouchableOpacity>
           ))}
+          {products.filter(product =>
+            product.name.toLowerCase().includes(productSearch.toLowerCase())
+          ).length === 0 && (
+            <Text style={styles.noSearchResults}>{strings.NO_PRODUCT_MATCH(productSearch)}</Text>
+          )}
         </ScrollView>
       </SafeAreaView>
     );
@@ -2069,22 +2517,26 @@ function StockInScreen({
       <StatusBar style="dark" />
       
       <View style={styles.screenHeader}>
-        <TouchableOpacity onPress={() => setSelectedProduct(null)}>
-          <Text style={styles.backButton}>← Back</Text>
+        <TouchableOpacity onPress={() => {
+          setSelectedProduct(null);
+          setQuantity('');
+          setCost('');
+        }}>
+          <Text style={styles.backButton}>{strings.BACK}</Text>
         </TouchableOpacity>
-        <Text style={styles.screenTitle}>Add Stock</Text>
+        <Text style={styles.screenTitle}>{strings.ADD_STOCK}</Text>
         <View style={{ width: 50 }} />
       </View>
 
       <View style={styles.selectedProductBanner}>
         <Text style={styles.selectedProductName}>{selectedProduct.name}</Text>
         <Text style={styles.selectedProductMeta}>
-          Currently: {selectedProduct.current_qty} {selectedProduct.unit_label}
+          {strings.CURRENTLY_IN_STOCK(selectedProduct.current_qty, selectedProduct.unit_label)}
         </Text>
       </View>
 
       <ScrollView style={styles.formContainer}>
-        <Text style={styles.inputLabel}>How many did you buy?</Text>
+        <Text style={styles.inputLabel}>{strings.HOW_MANY_BOUGHT}</Text>
         <View style={styles.priceInputRow}>
           <TextInput
             style={styles.quantityInput}
@@ -2098,7 +2550,28 @@ function StockInScreen({
           <Text style={styles.unitSuffix}>{selectedProduct.unit_label}</Text>
         </View>
 
-        <Text style={styles.inputLabel}>Total cost?</Text>
+        <View style={styles.costModeRow}>
+          <TouchableOpacity
+            style={[styles.costModeButton, costMode === 'total' && styles.costModeButtonActive]}
+            onPress={() => setCostMode('total')}
+          >
+            <Text style={[styles.costModeText, costMode === 'total' && styles.costModeTextActive]}>
+              {strings.COST_MODE_TOTAL}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.costModeButton, costMode === 'each' && styles.costModeButtonActive]}
+            onPress={() => setCostMode('each')}
+          >
+            <Text style={[styles.costModeText, costMode === 'each' && styles.costModeTextActive]}>
+              {strings.COST_MODE_EACH}
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.inputLabel}>
+          {costMode === 'each' ? strings.COST_PER_ITEM : strings.TOTAL_COST}
+        </Text>
         <View style={styles.priceInputRow}>
           <Text style={styles.currencyPrefix}>R</Text>
           <TextInput
@@ -2113,7 +2586,9 @@ function StockInScreen({
 
         {qty > 0 && totalCost > 0 && (
           <Text style={styles.costSummary}>
-            = R{(totalCost / qty).toFixed(2)} each
+            {costMode === 'each'
+              ? strings.COST_TOTAL(qty, enteredCost.toFixed(2), totalCost.toFixed(2))
+              : strings.COST_EACH((totalCost / qty).toFixed(2))}
           </Text>
         )}
 
@@ -2126,7 +2601,7 @@ function StockInScreen({
           disabled={!canSave || saving}
         >
           <Text style={styles.saveButtonText}>
-            {saving ? 'Saving...' : 'Save Stock-In'}
+            {saving ? strings.SAVING : strings.SAVE_STOCK_IN}
           </Text>
         </TouchableOpacity>
       </ScrollView>
@@ -2526,13 +3001,15 @@ function WeeklySummaryScreen({
       
       <View style={styles.screenHeader}>
         <TouchableOpacity onPress={onBack}>
-          <Text style={styles.backButton}>← Back</Text>
+          <Text style={styles.backButton}>{strings.BACK}</Text>
         </TouchableOpacity>
-        <Text style={styles.screenTitle}>Weekly Summary</Text>
+        <Text style={styles.screenTitle}>{strings.WEEKLY_SUMMARY}</Text>
         <View style={{ width: 50 }} />
       </View>
 
-      {renderContent()}
+      <ScrollView style={styles.weeklyScroll}>
+        {renderContent()}
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -2672,9 +3149,9 @@ function ActivityScreen({
       
       <View style={styles.screenHeader}>
         <TouchableOpacity onPress={onBack}>
-          <Text style={styles.backButton}>← Back</Text>
+          <Text style={styles.backButton}>{strings.BACK}</Text>
         </TouchableOpacity>
-        <Text style={styles.screenTitle}>Recent Activity</Text>
+        <Text style={styles.screenTitle}>{strings.RECENT_ACTIVITY}</Text>
         <View style={{ width: 50 }} />
       </View>
 
@@ -2695,8 +3172,8 @@ function ActivityScreen({
         {/* Top Sellers Card */}
         {topSellers.length > 0 && (
           <View style={styles.topSellersCard}>
-            <Text style={styles.topSellersTitle}>🏆 Top Sellers</Text>
-            <Text style={styles.topSellersSubtitle}>Since last count</Text>
+            <Text style={styles.topSellersTitle}>{strings.TOP_SELLERS}</Text>
+            <Text style={styles.topSellersSubtitle}>{strings.SINCE_LAST_COUNT}</Text>
             {topSellers.map((item, index) => (
               <View key={item.product_id} style={styles.topSellerRow}>
                 <Text style={styles.topSellerRank}>{index + 1}.</Text>
@@ -2708,21 +3185,21 @@ function ActivityScreen({
         )}
 
         {/* Activity by product */}
-        <Text style={styles.activitySectionTitle}>Product Details</Text>
+        <Text style={styles.activitySectionTitle}>{strings.PRODUCT_DETAILS}</Text>
         
         {activity.map((item) => (
           <View key={item.product_id} style={styles.activityCard}>
             <Text style={styles.activityProductName}>{item.product_name}</Text>
             
             <View style={styles.activityRow}>
-              <Text style={styles.activityLabel}>Current stock:</Text>
+              <Text style={styles.activityLabel}>{strings.CURRENT_STOCK_ACTIVITY}</Text>
               <Text style={styles.activityValue}>{item.current_qty}</Text>
             </View>
             
             {item.last_counts.length >= 2 && (
               <>
                 <View style={styles.activityRow}>
-                  <Text style={styles.activityLabel}>Sold since last count:</Text>
+                  <Text style={styles.activityLabel}>{strings.SOLD_SINCE_LAST}</Text>
                   <Text style={[
                     styles.activityValue,
                     item.sold_since_last > 0 && styles.activityValueGreen
@@ -2733,7 +3210,7 @@ function ActivityScreen({
                 
                 {item.profit_since_last > 0 && (
                   <View style={styles.activityRow}>
-                    <Text style={styles.activityLabel}>Profit:</Text>
+                    <Text style={styles.activityLabel}>{strings.PROFIT_LABEL}</Text>
                     <Text style={[styles.activityValue, styles.activityValueGreen]}>
                       R{item.profit_since_last.toFixed(0)}
                     </Text>
@@ -2744,19 +3221,19 @@ function ActivityScreen({
             
             {item.last_counts.length > 0 && (
               <Text style={styles.activityHistory}>
-                Last counts: {item.last_counts.join(' → ')}
+                {strings.LAST_COUNTS(item.last_counts)}
               </Text>
             )}
             
             {item.last_counts.length === 0 && (
-              <Text style={styles.activityNoData}>Not counted yet</Text>
+              <Text style={styles.activityNoData}>{strings.NOT_COUNTED_YET}</Text>
             )}
           </View>
         ))}
         
         {activity.length === 0 && (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyStateText}>No activity yet</Text>
+            <Text style={styles.emptyStateText}>{strings.NO_ACTIVITY}</Text>
           </View>
         )}
       </ScrollView>
@@ -2767,4 +3244,3 @@ function ActivityScreen({
 // ============================================
 // STYLES
 // ============================================
-

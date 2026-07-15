@@ -15,9 +15,8 @@
  * │                                                                 │
  * │  User taps "Count Stock" button on home screen                  │
  * │                                                                 │
- * │  Triggers:                                                      │
- * │  └─> StockCountService.getProductsForCounting()                 │
- * │      └─> SELECT * FROM products WHERE is_active = 1             │
+ * │  Triggers: loadProducts(db)                                     │
+ * │  └─> SELECT active products through src/core/db.ts               │
  * │                                                                 │
  * │  Returns: Product[] (all active products)                       │
  * └─────────────────────────────────────────────────────────────────┘
@@ -70,7 +69,7 @@
  * │                                                                 │
  * │  User taps "Save Count"                                         │
  * │                                                                 │
- * │  Triggers: StockCountService.saveCountSession(entries)          │
+ * │  Triggers: saveCountSession(db, entries, totalProducts)         │
  * │                                                                 │
  * │  Transaction:                                                   │
  * │  ┌─────────────────────────────────────────────────────────┐    │
@@ -150,13 +149,12 @@
  * COMPONENT STRUCTURE
  * ============================================
  * 
- * src/ui/stock-count/
- * ├── StockCountFlow.tsx      # Main UI component (3 screens in 1)
- * ├── StockCountService.ts    # Database operations
- * └── DataFlow.ts             # This documentation file
+ * App.tsx
+ * └── CountScreen             # Counting → Review → Results
  * 
  * src/core/
- * └── calculations.ts         # Pure calculation functions
+ * ├── calculations.ts         # Pure calculation functions
+ * └── db.ts                   # Atomic save and one-hour undo
  * 
  * database/
  * └── schema.sql              # SQLite schema

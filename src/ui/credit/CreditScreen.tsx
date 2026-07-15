@@ -50,6 +50,10 @@ type Mode =
   | { kind: 'entry'; customer: CustomerBalance; type: 'CREDIT' | 'PAYMENT' };
 
 export interface CreditStrings {
+  BACK: string;
+  ADD: string;
+  CANCEL: string;
+  ERROR_TITLE: string;
   CREDIT_TITLE: string;
   CREDIT_EMPTY: string;
   CREDIT_EMPTY_HINT: string;
@@ -82,6 +86,8 @@ export interface CreditStrings {
   CREDIT_PAID_UP: string;
   CREDIT_PAID_UP_TAG: string;
   CREDIT_OWES_YOU_CHANGE: string;
+  CREDIT_CURRENT_OWES: (amount: string) => string;
+  CREDIT_CURRENT_CHANGE: (amount: string) => string;
   ERROR_GENERIC: string;
 }
 
@@ -156,11 +162,11 @@ export function CreditScreen({
 
       <View style={styles.screenHeader}>
         <TouchableOpacity onPress={onBack}>
-          <Text style={styles.backButton}>← Back</Text>
+          <Text style={styles.backButton}>{strings.BACK}</Text>
         </TouchableOpacity>
         <Text style={styles.screenTitle}>{strings.CREDIT_TITLE}</Text>
         <TouchableOpacity onPress={() => setMode({ kind: 'add_customer' })}>
-          <Text style={styles.backButton}>+ Add</Text>
+          <Text style={styles.backButton}>{strings.ADD}</Text>
         </TouchableOpacity>
       </View>
 
@@ -315,6 +321,14 @@ function describeMeta(balance: CustomerBalance, strings: CreditStrings): string 
     : '';
 }
 
+function describeCurrent(balance: CustomerBalance, strings: CreditStrings): string {
+  if (balance.balance === 0) return strings.CREDIT_PAID_UP;
+  const amount = `R${Math.abs(balance.balance).toFixed(2)}`;
+  return balance.balance > 0
+    ? strings.CREDIT_CURRENT_OWES(amount)
+    : strings.CREDIT_CURRENT_CHANGE(amount);
+}
+
 /**
  * Add someone to the book.
  *
@@ -367,7 +381,7 @@ function AddCustomerScreen({
       onSaved();
     } catch (error) {
       console.error('Add customer error:', error);
-      Alert.alert('Error', strings.ERROR_GENERIC);
+      Alert.alert(strings.ERROR_TITLE, strings.ERROR_GENERIC);
       setSaving(false);
     }
   };
@@ -378,7 +392,7 @@ function AddCustomerScreen({
 
       <View style={styles.screenHeader}>
         <TouchableOpacity onPress={onCancel}>
-          <Text style={styles.backButton}>Cancel</Text>
+          <Text style={styles.backButton}>{strings.CANCEL}</Text>
         </TouchableOpacity>
         <Text style={styles.screenTitle}>{strings.CREDIT_ADD_CUSTOMER}</Text>
         <View style={{ width: 50 }} />
@@ -506,7 +520,7 @@ function RecordEntryScreen({
       onSaved();
     } catch (error) {
       console.error('Record credit entry error:', error);
-      Alert.alert('Error', strings.ERROR_GENERIC);
+      Alert.alert(strings.ERROR_TITLE, strings.ERROR_GENERIC);
       setSaving(false);
     }
   };
@@ -517,7 +531,7 @@ function RecordEntryScreen({
 
       <View style={styles.screenHeader}>
         <TouchableOpacity onPress={onCancel}>
-          <Text style={styles.backButton}>Cancel</Text>
+          <Text style={styles.backButton}>{strings.CANCEL}</Text>
         </TouchableOpacity>
         <Text style={styles.screenTitle}>
           {type === 'CREDIT' ? strings.CREDIT_GIVE : strings.CREDIT_RECEIVE}
@@ -527,7 +541,7 @@ function RecordEntryScreen({
 
       <ScrollView style={cs.form}>
         <Text style={cs.entryCustomer}>{customer.customer_name}</Text>
-        <Text style={cs.entryCurrent}>{customer.statement}</Text>
+        <Text style={cs.entryCurrent}>{describeCurrent(customer, strings)}</Text>
 
         <Text style={styles.inputLabel}>{strings.CREDIT_AMOUNT}</Text>
         <View style={styles.priceInputRow}>

@@ -1,16 +1,19 @@
 /**
  * Styles specific to the credit book.
  *
- * Shared pieces (container, headers, inputs, save button) come from
- * ../styles. Only what is genuinely new to this feature lives here, using the
- * same palette as the rest of the app:
- *   #4CAF50 green   = money coming in / positive action
- *   #E67E22 orange  = money owed / needs attention
- *   #1A1A1A         = primary text
- *   #888888         = secondary text
+ * Shared pieces (container, headers, inputs, save button) come from ../styles;
+ * every colour, size and space comes from ../theme. Only what is genuinely new
+ * to this feature lives here.
+ *
+ * Within this screen the money colours mean:
+ *   amber = owed to you — earned, but not in your hand
+ *   red   = a promise that has passed
+ *   green = paid up, or an action that brings money in
  */
 
 import { StyleSheet } from 'react-native';
+
+import { color } from '../theme';
 
 export const creditStyles = StyleSheet.create({
   list: {
@@ -24,24 +27,24 @@ export const creditStyles = StyleSheet.create({
   totalCard: {
     marginHorizontal: 16,
     marginTop: 12,
-    backgroundColor: '#FFF8F0',
+    backgroundColor: color.amberSoft,
     padding: 20,
     borderRadius: 12,
     alignItems: 'center',
   },
   totalLabel: {
     fontSize: 13,
-    color: '#888888',
+    color: color.inkMuted,
     marginBottom: 4,
   },
   totalAmount: {
     fontSize: 32,
     fontWeight: '700',
-    color: '#E67E22',
+    color: color.amberInk,
   },
   totalHint: {
     fontSize: 12,
-    color: '#AAAAAA',
+    color: color.inkMuted,
     marginTop: 6,
     textAlign: 'center',
   },
@@ -51,24 +54,24 @@ export const creditStyles = StyleSheet.create({
   overdueCard: {
     marginHorizontal: 16,
     marginTop: 12,
-    backgroundColor: '#FDF3F2',
+    backgroundColor: color.redSoft,
     padding: 16,
     borderRadius: 12,
   },
   overdueTitle: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#C0392B',
+    color: color.redInk,
     marginBottom: 8,
   },
   overdueItem: {
     fontSize: 14,
-    color: '#555555',
+    color: color.inkSecondary,
     marginBottom: 4,
   },
   overdueHint: {
     fontSize: 11,
-    color: '#AAAAAA',
+    color: color.inkMuted,
     marginTop: 6,
     fontStyle: 'italic',
   },
@@ -85,44 +88,48 @@ export const creditStyles = StyleSheet.create({
     paddingHorizontal: 14,
     borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
-    backgroundColor: '#FFFFFF',
+    borderColor: color.border,
+    backgroundColor: color.surface,
   },
   dueChipActive: {
-    borderColor: '#4CAF50',
-    backgroundColor: '#F1F8F2',
+    borderColor: color.greenBorder,
+    backgroundColor: color.greenSoft,
   },
   dueChipText: {
     fontSize: 14,
-    color: '#666666',
+    color: color.inkSecondary,
   },
   dueChipTextActive: {
-    color: '#2E7D32',
+    color: color.greenInk,
     fontWeight: '600',
   },
 
-  // Debts that have gone quiet
+  // Debts that have gone quiet.
+  //
+  // Amber, not red: silence is money sitting still, which is the amber idea.
+  // Red is reserved for the overdue card above it -- a named day that has
+  // passed. If both were red, neither would lead.
   staleCard: {
     marginHorizontal: 16,
     marginTop: 12,
-    backgroundColor: '#FFF4F4',
+    backgroundColor: color.amberSoft,
     padding: 16,
     borderRadius: 12,
   },
   staleTitle: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#C0392B',
+    color: color.amberInk,
     marginBottom: 8,
   },
   staleItem: {
     fontSize: 14,
-    color: '#555555',
+    color: color.inkSecondary,
     marginBottom: 4,
   },
   staleHint: {
     fontSize: 11,
-    color: '#AAAAAA',
+    color: color.inkMuted,
     marginTop: 6,
     fontStyle: 'italic',
   },
@@ -131,10 +138,10 @@ export const creditStyles = StyleSheet.create({
   customerCard: {
     marginHorizontal: 16,
     marginTop: 12,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#EEEEEE',
+    borderColor: color.border,
     padding: 16,
   },
   customerHeader: {
@@ -145,32 +152,32 @@ export const creditStyles = StyleSheet.create({
   customerName: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#1A1A1A',
+    color: color.ink,
     flex: 1,
   },
   customerBalance: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#E67E22',
+    color: color.amberInk,
   },
   customerBalanceCredit: {
-    color: '#4CAF50',
+    color: color.greenInk,
   },
   customerCardSettled: {
-    backgroundColor: '#FBFBFB',
+    backgroundColor: color.surfaceSunken,
   },
   customerSettledTag: {
     fontSize: 12,
-    color: '#4CAF50',
+    color: color.greenInk,
     fontWeight: '500',
   },
   customerMeta: {
     fontSize: 12,
-    color: '#AAAAAA',
+    color: color.inkMuted,
     marginTop: 2,
   },
   customerMetaOverdue: {
-    color: '#C0392B',
+    color: color.redInk,
     fontWeight: '500',
   },
   customerActions: {
@@ -183,36 +190,36 @@ export const creditStyles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
+    borderColor: color.border,
     alignItems: 'center',
   },
   giveButtonText: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#666666',
+    color: color.inkSecondary,
   },
   receiveButton: {
     flex: 1,
     paddingVertical: 12,
     borderRadius: 8,
-    backgroundColor: '#4CAF50',
+    backgroundColor: color.green,
     alignItems: 'center',
   },
   receiveButtonText: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: color.onAction,
   },
 
   // Recording an entry
   entryCustomer: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#1A1A1A',
+    color: color.ink,
   },
   entryCurrent: {
     fontSize: 14,
-    color: '#888888',
+    color: color.inkMuted,
     marginTop: 4,
   },
 
@@ -224,13 +231,13 @@ export const creditStyles = StyleSheet.create({
   emptyTitle: {
     fontSize: 20,
     fontWeight: '600',
-    color: '#1A1A1A',
+    color: color.ink,
     marginBottom: 8,
     textAlign: 'center',
   },
   emptyHint: {
     fontSize: 14,
-    color: '#888888',
+    color: color.inkMuted,
     textAlign: 'center',
     marginBottom: 24,
     lineHeight: 20,

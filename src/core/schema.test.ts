@@ -178,26 +178,110 @@ async function run() {
 
   console.log('');
   console.log('========================================');
-  console.log('TEST: a stale database is rebuilt');
+  console.log('TEST: a v4 database is migrated without losing data');
   console.log('========================================');
 
-  // Simulate a device still holding an older schema version.
+  // Build the exact previous schema: all current tables, but without the v5
+  // due_at column. This is stronger than only changing PRAGMA user_version.
   const staleRaw = new DatabaseSync(':memory:');
-  await initDatabase(adapt(staleRaw));
-  staleRaw.exec(`INSERT INTO products (name, current_qty, created_at, updated_at) VALUES ('Old', 5, 1, 1)`);
-  staleRaw.exec(`PRAGMA user_version = ${SCHEMA_VERSION - 1}`);
+  const v4Sql = readFileSync(join(REPO_ROOT, 'database', 'schema.sql'), 'utf8')
+    .replace(/^\s*due_at\s+INTEGER,\r?\n/m, '');
+  staleRaw.exec(v4Sql);
+  staleRaw.exec('PRAGMA user_version = 4;');
+  staleRaw.exec(`
+    INSERT INTO products (id, name, current_qty, created_at, updated_at) VALUES (99, 'Old', 5, 1, 1);
+    INSERT INTO customers (id, name, created_at, updated_at) VALUES (1, 'Thandi', 1, 1);
+    INSERT INTO credit_entries (id, customer_id, type, amount, recorded_at) VALUES (1, 1, 'CREDIT', 25, 2);
+    INSERT INTO expenses (id, category, amount, recorded_at) VALUES (1, 'RENT', 100, 2);
+    INSERT INTO cash_ups (id, counted_amount, expected_amount, difference, recorded_at) VALUES (1, 50, 50, 0, 2);
+  `);
 
   await initDatabase(adapt(staleRaw));
 
-  const afterReset = staleRaw.prepare('SELECT COUNT(*) as c FROM products').get() as { c: number };
-  equal(afterReset.c, 0, 'stale database is dropped and rebuilt empty');
+  const keptProduct = staleRaw.prepare("SELECT COUNT(*) as c FROM products WHERE id = 99 AND name = 'Old'").get() as { c: number };
+  const keptCredit = staleRaw.prepare('SELECT COUNT(*) as c FROM credit_entries').get() as { c: number };
+  const keptExpense = staleRaw.prepare('SELECT COUNT(*) as c FROM expenses').get() as { c: number };
+  const keptCashUp = staleRaw.prepare('SELECT COUNT(*) as c FROM cash_ups').get() as { c: number };
+  equal(keptProduct.c, 1, 'products survive the migration');
+  equal(keptCredit.c, 1, 'credit entries survive the migration');
+  equal(keptExpense.c, 1, 'expenses survive the migration');
+  equal(keptCashUp.c, 1, 'cash-ups survive the migration');
 
   const resetVersion = staleRaw.prepare('PRAGMA user_version').get() as { user_version: number };
-  equal(resetVersion.user_version, SCHEMA_VERSION, 'rebuilt database is stamped current');
+  equal(resetVersion.user_version, SCHEMA_VERSION, 'migrated database is stamped current');
 
   for (const table of TABLES) {
-    check(describe(staleRaw, table) === describe(freshRaw, table), `${table} rebuilt to the current shape`);
+    check(describe(staleRaw, table) === describe(freshRaw, table), `${table} has the current shape`);
   }
+
+  await initDatabase(adapt(staleRaw));
+  equal(
+    (staleRaw.prepare('SELECT COUNT(*) as c FROM products WHERE id = 99').get() as { c: number }).c,
+    1,
+    'running setup again is idempotent'
+  );
+
+  console.log('');
+  console.log('========================================');
+  console.log('TEST: a v2 database follows every migration step');
+  console.log('========================================');
+
+  const v2Raw = new DatabaseSync(':memory:');
+  v2Raw.exec(v4Sql);
+  v2Raw.exec(`
+    DROP TABLE cash_ups;
+    DROP TABLE expenses;
+    PRAGMA user_version = 2;
+    INSERT INTO products (id, name, current_qty, created_at, updated_at)
+      VALUES (99, 'Migration marker', 7, 1, 1);
+    INSERT INTO customers (id, name, created_at, updated_at)
+      VALUES (99, 'Legacy customer', 1, 1);
+    INSERT INTO credit_entries (id, customer_id, type, amount, recorded_at)
+      VALUES (99, 99, 'CREDIT', 30, 2);
+  `);
+  await initDatabase(adapt(v2Raw));
+  equal(
+    (v2Raw.prepare('PRAGMA user_version').get() as { user_version: number }).user_version,
+    SCHEMA_VERSION,
+    'v2 reaches the current version'
+  );
+  equal(
+    (v2Raw.prepare('SELECT current_qty as value FROM products WHERE id = 99').get() as { value: number }).value,
+    7,
+    'v2 product data survives every step'
+  );
+  equal(
+    (v2Raw.prepare('SELECT amount as value FROM credit_entries WHERE id = 99').get() as { value: number }).value,
+    30,
+    'v2 credit data survives every step'
+  );
+  check(describe(v2Raw, 'expenses') === describe(freshRaw, 'expenses'), 'v2→3 creates expenses');
+  check(describe(v2Raw, 'cash_ups') === describe(freshRaw, 'cash_ups'), 'v3→4 creates cash-ups');
+  check(describe(v2Raw, 'credit_entries') === describe(freshRaw, 'credit_entries'), 'v4→5 adds due_at');
+
+  console.log('');
+  console.log('========================================');
+  console.log('TEST: an unknown legacy schema fails closed');
+  console.log('========================================');
+
+  const unknownRaw = new DatabaseSync(':memory:');
+  unknownRaw.exec(`
+    CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+    INSERT INTO products VALUES (1, 'Do not erase');
+    PRAGMA user_version = 1;
+  `);
+  let unknownRejected = false;
+  try {
+    await initDatabase(adapt(unknownRaw));
+  } catch {
+    unknownRejected = true;
+  }
+  check(unknownRejected, 'unsupported schema is rejected');
+  equal(
+    (unknownRaw.prepare('SELECT COUNT(*) as c FROM products').get() as { c: number }).c,
+    1,
+    'unsupported schema data is not erased'
+  );
 
   console.log('');
   console.log('========================================');

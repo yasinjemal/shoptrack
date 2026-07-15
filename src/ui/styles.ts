@@ -10,31 +10,37 @@
 
 import { StyleSheet } from 'react-native';
 
+import { color, elevation, radius, space, type } from './theme';
+
 export const styles = StyleSheet.create({
   // Loading
   loadingContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
   },
   loadingText: {
     marginTop: 16,
     fontSize: 16,
-    color: '#666666',
+    color: color.inkSecondary,
   },
 
   // Container
+  //
+  // The page is tinted, not white. White cards on a white page was most of why
+  // the app looked flat -- nothing read as an object, just text floating on a
+  // sheet. The canvas gives every card an edge without drawing one.
   container: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: color.canvas,
   },
 
   // Home header
   homeHeader: {
     padding: 24,
     paddingTop: 60,
-    backgroundColor: '#4CAF50',
+    backgroundColor: color.green,
   },
   homeContent: {
     flex: 1,
@@ -42,37 +48,33 @@ export const styles = StyleSheet.create({
   appName: {
     fontSize: 32,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: color.onAction,
   },
   tagline: {
     fontSize: 16,
-    color: '#FFFFFF',
+    color: color.onAction,
     opacity: 0.9,
     marginTop: 4,
   },
 
-  // Profit card
+  // Profit card — the reason the app exists, so it gets the most weight on the
+  // page: the highest elevation, the largest number, and room to breathe.
   profitCard: {
-    backgroundColor: '#FFFFFF',
-    margin: 16,
-    padding: 24,
-    borderRadius: 16,
+    backgroundColor: color.surface,
+    margin: space.base,
+    padding: space.xl,
+    borderRadius: radius.lg,
     alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 4,
+    ...elevation.raised,
   },
   profitLabel: {
-    fontSize: 14,
-    color: '#666666',
-    marginBottom: 8,
+    ...type.label,
+    color: color.inkSecondary,
+    marginBottom: space.sm,
   },
   profitValue: {
-    fontSize: 48,
-    fontWeight: '700',
-    color: '#4CAF50',
+    ...type.hero,
+    color: color.greenInk,
   },
 
   // Stats row
@@ -83,7 +85,7 @@ export const styles = StyleSheet.create({
   },
   statBox: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
@@ -91,11 +93,11 @@ export const styles = StyleSheet.create({
   statValue: {
     fontSize: 24,
     fontWeight: '700',
-    color: '#1A1A1A',
+    color: color.ink,
   },
   statLabel: {
     fontSize: 13,
-    color: '#666666',
+    color: color.inkSecondary,
     marginTop: 4,
   },
 
@@ -115,13 +117,13 @@ export const styles = StyleSheet.create({
   dbErrorTitle: {
     fontSize: 20,
     fontWeight: '600',
-    color: '#1A1A1A',
+    color: color.ink,
     textAlign: 'center',
     marginBottom: 10,
   },
   dbErrorHint: {
     fontSize: 14,
-    color: '#666666',
+    color: color.inkSecondary,
     textAlign: 'center',
     lineHeight: 21,
     marginBottom: 20,
@@ -129,7 +131,7 @@ export const styles = StyleSheet.create({
   // The raw error, for whoever is debugging this rather than shopping.
   dbErrorDetail: {
     fontSize: 11,
-    color: '#BBBBBB',
+    color: color.inkMuted,
     textAlign: 'center',
     fontStyle: 'italic',
   },
@@ -139,25 +141,25 @@ export const styles = StyleSheet.create({
   shortfallCard: {
     marginHorizontal: 16,
     marginTop: 12,
-    backgroundColor: '#FDF3F2',
+    backgroundColor: color.redSoft,
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
   },
   shortfallLabel: {
     fontSize: 13,
-    color: '#C0392B',
+    color: color.redInk,
     fontWeight: '600',
     marginBottom: 2,
   },
   shortfallAmount: {
     fontSize: 26,
     fontWeight: '700',
-    color: '#C0392B',
+    color: color.redInk,
   },
   shortfallHint: {
     fontSize: 12,
-    color: '#AAAAAA',
+    color: color.inkMuted,
     marginTop: 4,
     textAlign: 'center',
   },
@@ -167,10 +169,10 @@ export const styles = StyleSheet.create({
   netCard: {
     marginHorizontal: 16,
     marginTop: 12,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#EEEEEE',
+    borderColor: color.border,
     padding: 16,
   },
   netRow: {
@@ -181,41 +183,41 @@ export const styles = StyleSheet.create({
   },
   netRowLabel: {
     fontSize: 14,
-    color: '#888888',
+    color: color.inkMuted,
   },
   netRowValue: {
     fontSize: 15,
-    color: '#1A1A1A',
+    color: color.ink,
     fontWeight: '500',
   },
   netRowCost: {
     fontSize: 15,
-    color: '#C0392B',
+    color: color.redInk,
     fontWeight: '500',
   },
   netDivider: {
     height: 1,
-    backgroundColor: '#EEEEEE',
+    backgroundColor: color.surfaceSunken,
     marginVertical: 8,
   },
   netKeptLabel: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#1A1A1A',
+    color: color.ink,
   },
   netKeptValue: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#4CAF50',
+    color: color.greenInk,
   },
   netKeptLoss: {
-    color: '#C0392B',
+    color: color.redInk,
   },
   netNoExpenses: {
     marginHorizontal: 16,
     marginTop: 12,
     fontSize: 12,
-    color: '#AAAAAA',
+    color: color.inkMuted,
     fontStyle: 'italic',
     lineHeight: 17,
   },
@@ -225,29 +227,29 @@ export const styles = StyleSheet.create({
   creditCard: {
     marginHorizontal: 16,
     marginTop: 12,
-    backgroundColor: '#FFF8F0',
+    backgroundColor: color.amberSoft,
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
   },
   creditCardLabel: {
     fontSize: 13,
-    color: '#888888',
+    color: color.inkMuted,
     marginBottom: 4,
   },
   creditCardAmount: {
     fontSize: 26,
     fontWeight: '700',
-    color: '#E67E22',
+    color: color.amberInk,
   },
   creditCardHint: {
     fontSize: 12,
-    color: '#AAAAAA',
+    color: color.inkMuted,
     marginTop: 4,
   },
   profitOwedNote: {
     fontSize: 12,
-    color: '#E67E22',
+    color: color.amberInk,
     marginTop: 8,
     textAlign: 'center',
   },
@@ -255,30 +257,30 @@ export const styles = StyleSheet.create({
   stockValueCard: {
     marginHorizontal: 16,
     marginTop: 12,
-    backgroundColor: '#FAFAFA',
+    backgroundColor: color.surfaceSunken,
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
   },
   stockValueLabel: {
     fontSize: 13,
-    color: '#888888',
+    color: color.inkMuted,
     marginBottom: 4,
   },
   stockValueAmount: {
     fontSize: 22,
     fontWeight: '600',
-    color: '#555555',
+    color: color.inkSecondary,
   },
   stockValueHint: {
     fontSize: 11,
-    color: '#AAAAAA',
+    color: color.inkMuted,
     marginTop: 4,
     fontStyle: 'italic',
   },
   stockValueMissing: {
     fontSize: 11,
-    color: '#BBBBBB',
+    color: color.inkMuted,
     marginTop: 4,
     fontStyle: 'italic',
   },
@@ -287,14 +289,14 @@ export const styles = StyleSheet.create({
   restockPriorityCard: {
     marginHorizontal: 16,
     marginTop: 12,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     padding: 16,
     borderRadius: 12,
   },
   restockPriorityTitle: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#555555',
+    color: color.inkSecondary,
     marginBottom: 12,
   },
   restockPriorityItem: {
@@ -306,22 +308,22 @@ export const styles = StyleSheet.create({
   restockPriorityNumber: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#888888',
+    color: color.inkMuted,
     width: 20,
   },
   restockPriorityName: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#333333',
+    color: color.ink,
   },
   restockPriorityReason: {
     fontSize: 13,
-    color: '#888888',
+    color: color.inkMuted,
     marginLeft: 4,
   },
   restockPriorityHint: {
     fontSize: 11,
-    color: '#AAAAAA',
+    color: color.inkMuted,
     marginTop: 10,
     fontStyle: 'italic',
   },
@@ -331,26 +333,32 @@ export const styles = StyleSheet.create({
     padding: 16,
     gap: 12,
   },
+  // Counting stock is the one thing the whole product depends on, so it is the
+  // only solid, elevated, full-width control on the page. Everything else is a
+  // quiet card. Hierarchy does the teaching here, not copy.
   primaryAction: {
-    backgroundColor: '#4CAF50',
-    padding: 24,
-    borderRadius: 16,
+    backgroundColor: color.green,
+    padding: space.xl,
+    borderRadius: radius.lg,
     alignItems: 'center',
+    ...elevation.action,
+  },
+  primaryActionPressed: {
+    backgroundColor: color.greenPressed,
   },
   primaryActionIcon: {
     fontSize: 32,
-    marginBottom: 8,
+    marginBottom: space.sm,
   },
   primaryActionText: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#FFFFFF',
+    ...type.h2,
+    color: color.onAction,
   },
   primaryActionSubtext: {
-    fontSize: 14,
-    color: '#FFFFFF',
-    opacity: 0.9,
-    marginTop: 4,
+    ...type.label,
+    color: color.onAction,
+    opacity: 0.92,
+    marginTop: space.xs,
   },
   // Wraps into a grid rather than a single row. With five actions, `flex: 1`
   // in a fixed row gives each about 56dp on a small phone and the labels get
@@ -363,99 +371,139 @@ export const styles = StyleSheet.create({
   secondaryAction: {
     flexGrow: 1,
     flexBasis: '30%',
+    // Comfortably past the 44pt minimum touch target, one-handed.
     minWidth: 96,
-    backgroundColor: '#FFFFFF',
-    paddingVertical: 16,
-    paddingHorizontal: 12,
-    borderRadius: 12,
+    minHeight: 96,
+    backgroundColor: color.surface,
+    paddingVertical: space.base,
+    paddingHorizontal: space.md,
+    borderRadius: radius.md,
     alignItems: 'center',
+    justifyContent: 'center',
+    ...elevation.card,
+  },
+  secondaryActionPressed: {
+    backgroundColor: color.surfaceSunken,
   },
   secondaryActionIcon: {
     fontSize: 24,
-    marginBottom: 8,
+    marginBottom: space.sm,
   },
   secondaryActionText: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#1A1A1A',
+    ...type.bodyStrong,
+    color: color.ink,
+    textAlign: 'center',
   },
   secondaryActionHint: {
-    fontSize: 12,
-    color: '#888888',
-    marginTop: 4,
+    ...type.caption,
+    color: color.inkMuted,
+    marginTop: space.xs,
+    textAlign: 'center',
   },
 
   // How it works card
   howItWorksCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     margin: 16,
     padding: 20,
     borderRadius: 16,
     borderLeftWidth: 4,
-    borderLeftColor: '#4CAF50',
+    borderLeftColor: color.green,
   },
   howItWorksTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#1A1A1A',
+    color: color.ink,
     marginBottom: 16,
   },
   howItWorksStep: {
     fontSize: 15,
-    color: '#333333',
+    color: color.ink,
     marginBottom: 8,
     lineHeight: 22,
   },
   stepNumber: {
     fontWeight: '700',
-    color: '#4CAF50',
+    color: color.greenInk,
   },
   howItWorksNote: {
     fontSize: 13,
-    color: '#666666',
+    color: color.inkSecondary,
     marginTop: 12,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: '#E0E0E0',
+    borderTopColor: color.border,
     fontStyle: 'italic',
   },
 
   // Profit explainer
   profitExplainer: {
     fontSize: 13,
-    color: 'rgba(255,255,255,0.8)',
+    color: color.inkMuted,
     marginTop: 8,
+    textAlign: 'center',
+  },
+  countReminderCard: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    padding: 16,
+    borderRadius: 12,
+    backgroundColor: color.greenSoft,
+    borderWidth: 1,
+    borderColor: color.greenBorder,
+  },
+  countReminderTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: color.greenInk,
+  },
+  countReminderHint: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: color.greenInk,
+    marginTop: 4,
+  },
+  homeUndoButton: {
+    alignSelf: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 18,
+    marginTop: 4,
+  },
+  homeUndoText: {
+    color: color.redInk,
+    fontSize: 14,
+    fontWeight: '600',
   },
 
   // Empty state
   emptyPrompt: {
     padding: 24,
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     margin: 16,
     borderRadius: 16,
   },
   emptyPromptTitle: {
     fontSize: 22,
     fontWeight: '700',
-    color: '#1A1A1A',
+    color: color.ink,
     marginBottom: 12,
   },
   emptyPromptText: {
     fontSize: 16,
-    color: '#666666',
+    color: color.inkSecondary,
     textAlign: 'center',
     marginBottom: 8,
   },
   emptyPromptHow: {
     fontSize: 14,
-    color: '#888888',
+    color: color.inkMuted,
     textAlign: 'center',
     marginBottom: 20,
     lineHeight: 20,
   },
   emptyPromptButton: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: color.green,
     paddingVertical: 14,
     paddingHorizontal: 28,
     borderRadius: 10,
@@ -463,7 +511,7 @@ export const styles = StyleSheet.create({
   emptyPromptButtonText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: color.onAction,
   },
 
   // Screen header
@@ -473,22 +521,22 @@ export const styles = StyleSheet.create({
     justifyContent: 'space-between',
     padding: 16,
     paddingTop: 60,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
+    borderBottomColor: color.border,
   },
   screenTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#1A1A1A',
+    color: color.ink,
   },
   backButton: {
     fontSize: 16,
-    color: '#4CAF50',
+    color: color.greenInk,
   },
   addButton: {
     fontSize: 16,
-    color: '#4CAF50',
+    color: color.greenInk,
     fontWeight: '600',
   },
 
@@ -501,11 +549,11 @@ export const styles = StyleSheet.create({
   },
   emptyStateText: {
     fontSize: 18,
-    color: '#999999',
+    color: color.inkMuted,
     marginBottom: 16,
   },
   emptyStateButton: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: color.green,
     paddingVertical: 12,
     paddingHorizontal: 24,
     borderRadius: 8,
@@ -513,7 +561,7 @@ export const styles = StyleSheet.create({
   emptyStateButtonText: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: color.onAction,
   },
 
   // Product list
@@ -521,10 +569,10 @@ export const styles = StyleSheet.create({
     flex: 1,
   },
   productItem: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
+    borderBottomColor: color.border,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -534,24 +582,24 @@ export const styles = StyleSheet.create({
   },
   productEditHint: {
     fontSize: 20,
-    color: '#CCCCCC',
+    color: color.inkMuted,
     marginLeft: 12,
   },
   productSelectItem: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
+    borderBottomColor: color.border,
   },
   productName: {
     fontSize: 17,
     fontWeight: '500',
-    color: '#1A1A1A',
+    color: color.ink,
     marginBottom: 4,
   },
   productMeta: {
     fontSize: 14,
-    color: '#888888',
+    color: color.inkMuted,
   },
 
   // Form
@@ -561,96 +609,96 @@ export const styles = StyleSheet.create({
   inputLabel: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#1A1A1A',
+    color: color.ink,
     marginBottom: 8,
     marginTop: 16,
   },
   inputHint: {
     fontSize: 13,
-    color: '#888888',
+    color: color.inkMuted,
     marginTop: 4,
   },
   textInput: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
+    borderColor: color.border,
     padding: 16,
     fontSize: 17,
-    color: '#1A1A1A',
+    color: color.ink,
   },
   priceInputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
+    borderColor: color.border,
     paddingHorizontal: 16,
   },
   currencyPrefix: {
     fontSize: 20,
-    color: '#666666',
+    color: color.inkSecondary,
     marginRight: 4,
   },
   priceInput: {
     flex: 1,
     padding: 16,
     fontSize: 20,
-    color: '#1A1A1A',
+    color: color.ink,
   },
   quantityInput: {
     flex: 1,
     padding: 16,
     fontSize: 24,
     fontWeight: '600',
-    color: '#1A1A1A',
+    color: color.ink,
   },
   unitSuffix: {
     fontSize: 16,
-    color: '#666666',
+    color: color.inkSecondary,
     marginRight: 16,
   },
   costSummary: {
     fontSize: 16,
-    color: '#4CAF50',
+    color: color.greenInk,
     marginTop: 8,
     fontWeight: '500',
   },
   saveButton: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: color.green,
     paddingVertical: 16,
     borderRadius: 12,
     alignItems: 'center',
     marginTop: 32,
   },
   saveButtonDisabled: {
-    backgroundColor: '#CCCCCC',
+    backgroundColor: color.borderStrong,
   },
   saveButtonText: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: color.onAction,
   },
   
   // Search
   searchContainer: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     paddingHorizontal: 16,
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
+    borderBottomColor: color.border,
     flexDirection: 'row',
     alignItems: 'center',
   },
   searchInput: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
+    backgroundColor: color.surfaceSunken,
     borderRadius: 8,
     paddingHorizontal: 16,
     paddingVertical: 10,
     fontSize: 16,
-    color: '#1A1A1A',
+    color: color.ink,
   },
   searchClear: {
     position: 'absolute',
@@ -659,18 +707,53 @@ export const styles = StyleSheet.create({
   },
   searchClearText: {
     fontSize: 16,
-    color: '#999999',
+    color: color.inkMuted,
+  },
+  readyCard: {
+    marginHorizontal: 16,
+    marginBottom: 12,
+    padding: 14,
+    backgroundColor: color.greenSoft,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  readyCardText: {
+    flex: 1,
+  },
+  readyCardTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: color.greenInk,
+  },
+  readyCardHint: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: color.greenInk,
+    marginTop: 3,
+  },
+  readyCardButton: {
+    backgroundColor: color.greenPressed,
+    borderRadius: 9,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  readyCardButtonText: {
+    color: color.onAction,
+    fontSize: 13,
+    fontWeight: '700',
   },
   noSearchResults: {
     textAlign: 'center',
-    color: '#888888',
+    color: color.inkMuted,
     fontSize: 15,
     padding: 32,
   },
   
   // Edit product
   editProductInfo: {
-    backgroundColor: '#F5F5F5',
+    backgroundColor: color.surfaceSunken,
     padding: 16,
     borderRadius: 12,
     marginTop: 24,
@@ -678,44 +761,44 @@ export const styles = StyleSheet.create({
   editProductInfoText: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#333333',
+    color: color.ink,
   },
   editProductInfoHint: {
     fontSize: 13,
-    color: '#888888',
+    color: color.inkMuted,
     marginTop: 4,
   },
   deleteButton: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     paddingVertical: 16,
     borderRadius: 12,
     alignItems: 'center',
     marginTop: 16,
     borderWidth: 1,
-    borderColor: '#FF5252',
+    borderColor: color.redBorder,
   },
   deleteButtonText: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#FF5252',
+    color: color.redInk,
   },
 
   // Count screen
   countInstructions: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#E0E0E0',
+    borderBottomColor: color.border,
   },
   countInstructionsTitle: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#1A1A1A',
+    color: color.ink,
     textAlign: 'center',
   },
   countInstructionsHint: {
     fontSize: 14,
-    color: '#666666',
+    color: color.inkSecondary,
     textAlign: 'center',
     marginTop: 4,
   },
@@ -723,8 +806,8 @@ export const styles = StyleSheet.create({
     padding: 12,
     textAlign: 'center',
     fontSize: 14,
-    color: '#666666',
-    backgroundColor: '#F5F5F5',
+    color: color.inkSecondary,
+    backgroundColor: color.surfaceSunken,
   },
   countList: {
     flex: 1,
@@ -732,10 +815,10 @@ export const styles = StyleSheet.create({
   countItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     padding: 16,
     borderBottomWidth: 1,
-    borderBottomColor: '#F0F0F0',
+    borderBottomColor: color.border,
   },
   countItemInfo: {
     flex: 1,
@@ -743,31 +826,31 @@ export const styles = StyleSheet.create({
   countItemName: {
     fontSize: 17,
     fontWeight: '500',
-    color: '#1A1A1A',
+    color: color.ink,
   },
   countItemPrev: {
     fontSize: 14,
-    color: '#888888',
+    color: color.inkMuted,
     marginTop: 2,
   },
   countInput: {
-    backgroundColor: '#F5F5F5',
+    backgroundColor: color.surfaceSunken,
     borderRadius: 8,
     padding: 12,
     fontSize: 18,
     fontWeight: '600',
     textAlign: 'center',
     width: 70,
-    color: '#1A1A1A',
+    color: color.ink,
   },
   countBottomBar: {
     padding: 16,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     borderTopWidth: 1,
-    borderTopColor: '#E0E0E0',
+    borderTopColor: color.border,
   },
   saveCountButton: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: color.green,
     paddingVertical: 16,
     borderRadius: 12,
     alignItems: 'center',
@@ -787,29 +870,29 @@ export const styles = StyleSheet.create({
   resultsTitle: {
     fontSize: 28,
     fontWeight: '700',
-    color: '#1A1A1A',
+    color: color.ink,
     marginBottom: 8,
   },
   resultsSubtitle: {
     fontSize: 16,
-    color: '#666666',
+    color: color.inkSecondary,
     textAlign: 'center',
     marginBottom: 24,
   },
   nextStepBox: {
-    backgroundColor: '#E3F2FD',
+    backgroundColor: color.infoSoft,
     padding: 20,
     borderRadius: 12,
     marginBottom: 32,
   },
   nextStepText: {
     fontSize: 16,
-    color: '#1565C0',
+    color: color.infoInk,
     textAlign: 'center',
     lineHeight: 24,
   },
   profitResultCard: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: color.green,
     paddingVertical: 32,
     paddingHorizontal: 48,
     borderRadius: 16,
@@ -818,31 +901,31 @@ export const styles = StyleSheet.create({
   },
   profitResultLabel: {
     fontSize: 16,
-    color: '#FFFFFF',
+    color: color.onAction,
     opacity: 0.9,
     marginBottom: 8,
   },
   profitResultValue: {
     fontSize: 48,
     fontWeight: '700',
-    color: '#FFFFFF',
+    color: color.onAction,
   },
   profitExplainerText: {
     fontSize: 15,
-    color: '#666666',
+    color: color.inkSecondary,
     textAlign: 'center',
     marginBottom: 16,
   },
   unusualChangeText: {
     fontSize: 14,
-    color: '#888888',
+    color: color.inkMuted,
     textAlign: 'center',
     marginTop: 8,
     marginBottom: 16,
   },
   missingDataHintSmall: {
     fontSize: 13,
-    color: '#888888',
+    color: color.inkMuted,
     textAlign: 'center',
     fontStyle: 'italic',
     marginTop: 8,
@@ -852,7 +935,7 @@ export const styles = StyleSheet.create({
   
   // Restock notice (when stock went up)
   restockNotice: {
-    backgroundColor: '#FFF8E1',
+    backgroundColor: color.amberSoft,
     padding: 24,
     borderRadius: 16,
     alignItems: 'center',
@@ -865,25 +948,25 @@ export const styles = StyleSheet.create({
   restockTitle: {
     fontSize: 20,
     fontWeight: '600',
-    color: '#F57C00',
+    color: color.amberInk,
     marginBottom: 8,
   },
   restockText: {
     fontSize: 15,
-    color: '#666666',
+    color: color.inkSecondary,
     textAlign: 'center',
     marginBottom: 12,
   },
   restockHint: {
     fontSize: 13,
-    color: '#888888',
+    color: color.inkMuted,
     textAlign: 'center',
     fontStyle: 'italic',
   },
   
   // No change notice
   noChangeNotice: {
-    backgroundColor: '#F5F5F5',
+    backgroundColor: color.surfaceSunken,
     padding: 24,
     borderRadius: 16,
     alignItems: 'center',
@@ -891,16 +974,16 @@ export const styles = StyleSheet.create({
   },
   noChangeText: {
     fontSize: 16,
-    color: '#666666',
+    color: color.inkSecondary,
     marginBottom: 8,
   },
   noChangeHint: {
     fontSize: 14,
-    color: '#888888',
+    color: color.inkMuted,
   },
   
   doneButton: {
-    backgroundColor: '#1A1A1A',
+    backgroundColor: color.ink,
     paddingVertical: 16,
     paddingHorizontal: 48,
     borderRadius: 12,
@@ -908,18 +991,56 @@ export const styles = StyleSheet.create({
   doneButtonText: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#FFFFFF',
+    color: color.onAction,
+  },
+  undoButton: {
+    paddingVertical: 14,
+    paddingHorizontal: 24,
+    marginTop: 10,
+  },
+  undoButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: color.redInk,
+  },
+  reviewHint: {
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    color: color.inkSecondary,
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  reviewItem: {
+    backgroundColor: color.surface,
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: color.border,
+  },
+  reviewItemName: {
+    fontSize: 17,
+    fontWeight: '600',
+    color: color.ink,
+  },
+  reviewItemValue: {
+    fontSize: 15,
+    color: color.inkSecondary,
+    marginTop: 5,
+  },
+  reviewWarning: {
+    fontSize: 13,
+    color: color.redInk,
+    marginTop: 7,
   },
 
   // Stock-in
   sectionTitle: {
     fontSize: 16,
-    color: '#666666',
+    color: color.inkSecondary,
     padding: 16,
     paddingBottom: 8,
   },
   selectedProductBanner: {
-    backgroundColor: '#E8F5E9',
+    backgroundColor: color.greenSoft,
     padding: 16,
     marginHorizontal: 16,
     marginTop: 16,
@@ -928,17 +1049,41 @@ export const styles = StyleSheet.create({
   selectedProductName: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#1A1A1A',
+    color: color.ink,
   },
   selectedProductMeta: {
     fontSize: 14,
-    color: '#666666',
+    color: color.inkSecondary,
     marginTop: 4,
+  },
+  costModeRow: {
+    flexDirection: 'row',
+    backgroundColor: color.surfaceSunken,
+    borderRadius: 10,
+    padding: 3,
+    marginBottom: 18,
+  },
+  costModeButton: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  costModeButtonActive: {
+    backgroundColor: color.surface,
+  },
+  costModeText: {
+    color: color.inkSecondary,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  costModeTextActive: {
+    color: color.greenInk,
   },
 
   // Tier 4.3: Silent Loss Detector
   lossCard: {
-    backgroundColor: '#FAFAFA',
+    backgroundColor: color.surfaceSunken,
     borderRadius: 12,
     padding: 16,
     marginBottom: 16,
@@ -946,39 +1091,39 @@ export const styles = StyleSheet.create({
   lossTitle: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#666666',
+    color: color.inkSecondary,
     marginBottom: 10,
   },
   lossItem: {
     fontSize: 14,
-    color: '#777777',
+    color: color.inkMuted,
     marginBottom: 4,
   },
   lossHint: {
     fontSize: 11,
-    color: '#AAAAAA',
+    color: color.inkMuted,
     fontStyle: 'italic',
     marginTop: 8,
   },
 
   // Activity Screen
   topSellersCard: {
-    backgroundColor: '#FFF9E6',
+    backgroundColor: color.amberSoft,
     borderRadius: 16,
     padding: 16,
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: '#FFE082',
+    borderColor: color.amberBorder,
   },
   topSellersTitle: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#F57C00',
+    color: color.amberInk,
     marginBottom: 4,
   },
   topSellersSubtitle: {
     fontSize: 13,
-    color: '#888888',
+    color: color.inkMuted,
     marginBottom: 12,
   },
   topSellerRow: {
@@ -987,28 +1132,28 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: 8,
     borderBottomWidth: 1,
-    borderBottomColor: '#FFE082',
+    borderBottomColor: color.amberBorder,
   },
   topSellerRank: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#F57C00',
+    color: color.amberInk,
     width: 24,
   },
   topSellerName: {
     fontSize: 15,
-    color: '#1A1A1A',
+    color: color.ink,
     flex: 1,
   },
   topSellerProfit: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#2E7D32',
+    color: color.greenInk,
   },
   activitySectionTitle: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#666666',
+    color: color.inkSecondary,
     marginBottom: 12,
     marginTop: 8,
   },
@@ -1016,17 +1161,17 @@ export const styles = StyleSheet.create({
     padding: 16,
   },
   activityCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     borderRadius: 16,
     padding: 16,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
+    borderColor: color.border,
   },
   activityProductName: {
     fontSize: 17,
     fontWeight: '600',
-    color: '#1A1A1A',
+    color: color.ink,
     marginBottom: 12,
   },
   activityRow: {
@@ -1036,44 +1181,44 @@ export const styles = StyleSheet.create({
   },
   activityLabel: {
     fontSize: 15,
-    color: '#666666',
+    color: color.inkSecondary,
   },
   activityValue: {
     fontSize: 15,
     fontWeight: '500',
-    color: '#1A1A1A',
+    color: color.ink,
   },
   activityValueGreen: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#2E7D32',
+    color: color.greenInk,
   },
   activityHistory: {
     marginTop: 12,
     paddingTop: 12,
     borderTopWidth: 1,
-    borderTopColor: '#E0E0E0',
+    borderTopColor: color.border,
   },
   activityHistoryTitle: {
     fontSize: 13,
-    color: '#888888',
+    color: color.inkMuted,
     marginBottom: 8,
   },
   activityHistoryItem: {
     fontSize: 14,
-    color: '#666666',
+    color: color.inkSecondary,
     paddingVertical: 2,
   },
   activityNoData: {
     fontSize: 16,
-    color: '#888888',
+    color: color.inkMuted,
     textAlign: 'center',
     paddingVertical: 32,
   },
 
   // Activity Button (Home) - replaced by insight buttons
   activityButton: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     borderRadius: 12,
     padding: 16,
     marginTop: 16,
@@ -1081,7 +1226,7 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#E0E0E0',
+    borderColor: color.border,
   },
   activityButtonIcon: {
     fontSize: 20,
@@ -1090,7 +1235,7 @@ export const styles = StyleSheet.create({
   activityButtonText: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#1A1A1A',
+    color: color.ink,
   },
 
   // Insight Buttons (Home)
@@ -1101,12 +1246,12 @@ export const styles = StyleSheet.create({
   },
   insightButton: {
     flex: 1,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     borderRadius: 12,
     padding: 14,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#E0E0E0',
+    borderColor: color.border,
   },
   insightButtonIcon: {
     fontSize: 20,
@@ -1115,81 +1260,84 @@ export const styles = StyleSheet.create({
   insightButtonText: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#1A1A1A',
+    color: color.ink,
     textAlign: 'center',
   },
 
   // Low Stock Warning (Home)
   lowStockWarning: {
-    backgroundColor: '#FFF3E0',
+    backgroundColor: color.amberSoft,
     borderRadius: 12,
     padding: 16,
     marginTop: 16,
     borderWidth: 1,
-    borderColor: '#FFCC80',
+    borderColor: color.amberBorder,
   },
   lowStockTitle: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#E65100',
+    color: color.amberInk,
     marginBottom: 8,
   },
   lowStockItem: {
     fontSize: 14,
-    color: '#BF360C',
+    color: color.redInk,
     paddingVertical: 2,
   },
 
   // Weekly Summary Screen
   weeklyContent: {
-    flex: 1,
     padding: 24,
+    paddingBottom: 40,
+  },
+  weeklyScroll: {
+    flex: 1,
   },
   weeklyHeading: {
     fontSize: 28,
     fontWeight: '700',
-    color: '#1A1A1A',
+    color: color.ink,
     marginBottom: 24,
   },
   weeklyCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     borderRadius: 16,
     padding: 20,
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: '#E0E0E0',
+    borderColor: color.border,
   },
   weeklyLabel: {
     fontSize: 16,
-    color: '#666666',
+    color: color.inkSecondary,
     marginBottom: 4,
   },
   weeklyProfit: {
     fontSize: 32,
     fontWeight: '700',
-    color: '#2E7D32',
+    color: color.greenInk,
   },
   confidenceCount: {
     fontSize: 13,
-    color: '#888888',
+    color: color.inkMuted,
     marginTop: 8,
   },
   confidenceLevel: {
     fontSize: 12,
-    color: '#666666',
+    color: color.inkSecondary,
     fontStyle: 'italic',
     marginTop: 2,
   },
   missingDataHint: {
     fontSize: 14,
-    color: '#666666',
+    color: color.inkSecondary,
     textAlign: 'center',
     fontStyle: 'italic',
   },
   
   // Tier 4.2: Slow Stock (Money Tied Up)
   slowStockCard: {
-    backgroundColor: '#FFF8E1',
+    backgroundColor: color.amberSoft,
     borderRadius: 12,
     padding: 16,
     marginTop: 12,
@@ -1197,13 +1345,13 @@ export const styles = StyleSheet.create({
   slowStockTitle: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#8D6E63',
+    color: color.amberInk,
     marginBottom: 4,
   },
   slowStockValue: {
     fontSize: 22,
     fontWeight: '600',
-    color: '#6D4C41',
+    color: color.amberInk,
     marginBottom: 12,
   },
   slowStockList: {
@@ -1211,18 +1359,18 @@ export const styles = StyleSheet.create({
   },
   slowStockItem: {
     fontSize: 14,
-    color: '#795548',
+    color: color.amberInk,
     marginBottom: 4,
   },
   slowStockHint: {
     fontSize: 11,
-    color: '#A1887F',
+    color: color.inkMuted,
     fontStyle: 'italic',
   },
   
   // Tier 4.4: Owner Memory
   ownerMemoryCard: {
-    backgroundColor: '#F5F5F5',
+    backgroundColor: color.surfaceSunken,
     borderRadius: 12,
     padding: 16,
     marginTop: 12,
@@ -1230,60 +1378,60 @@ export const styles = StyleSheet.create({
   ownerMemoryTitle: {
     fontSize: 14,
     fontWeight: '500',
-    color: '#666666',
+    color: color.inkSecondary,
     marginBottom: 8,
   },
   ownerMemoryItem: {
     fontSize: 14,
-    color: '#555555',
+    color: color.inkSecondary,
     marginBottom: 4,
   },
   
   weeklyTopProduct: {
     fontSize: 22,
     fontWeight: '600',
-    color: '#1A1A1A',
+    color: color.ink,
   },
   weeklyComparison: {
     fontSize: 22,
     fontWeight: '600',
   },
   weeklyComparisonUp: {
-    color: '#2E7D32',
+    color: color.greenInk,
   },
   weeklyComparisonDown: {
-    color: '#D32F2F',
+    color: color.redInk,
   },
   weeklyHintCard: {
-    backgroundColor: '#E3F2FD',
+    backgroundColor: color.infoSoft,
     borderRadius: 12,
     padding: 16,
     marginTop: 8,
   },
   weeklyHint: {
     fontSize: 15,
-    color: '#1565C0',
+    color: color.infoInk,
     textAlign: 'center',
   },
   weeklyFirstWeek: {
     fontSize: 18,
     fontWeight: '500',
-    color: '#1A1A1A',
+    color: color.ink,
     marginBottom: 8,
   },
   weeklyFirstWeekHint: {
     fontSize: 15,
-    color: '#666666',
+    color: color.inkSecondary,
   },
   weeklyNoData: {
     fontSize: 18,
     fontWeight: '500',
-    color: '#666666',
+    color: color.inkSecondary,
     marginBottom: 8,
   },
   weeklyNoDataHint: {
     fontSize: 15,
-    color: '#888888',
+    color: color.inkMuted,
   },
 
   // Data Safety Section (Backup/Restore)
@@ -1291,25 +1439,25 @@ export const styles = StyleSheet.create({
     marginTop: 32,
     paddingTop: 24,
     borderTopWidth: 1,
-    borderTopColor: '#E0E0E0',
+    borderTopColor: color.border,
   },
   dataSectionTitle: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#888888',
+    color: color.inkMuted,
     marginBottom: 12,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
   dataButton: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: color.surface,
     borderRadius: 12,
     padding: 16,
     marginBottom: 12,
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#E0E0E0',
+    borderColor: color.border,
   },
   dataButtonIcon: {
     fontSize: 24,
@@ -1321,17 +1469,17 @@ export const styles = StyleSheet.create({
   dataButtonText: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#1A1A1A',
+    color: color.ink,
     marginBottom: 2,
   },
   dataButtonHint: {
     fontSize: 13,
-    color: '#888888',
+    color: color.inkMuted,
   },
 
   // Language Toggle
   languageButton: {
-    backgroundColor: '#F5F5F5',
+    backgroundColor: color.surfaceSunken,
     borderRadius: 12,
     padding: 16,
     marginTop: 8,
@@ -1344,12 +1492,12 @@ export const styles = StyleSheet.create({
   },
   languageButtonLabel: {
     fontSize: 15,
-    color: '#666666',
+    color: color.inkSecondary,
     marginRight: 6,
   },
   languageButtonValue: {
     fontSize: 15,
     fontWeight: '600',
-    color: '#1A1A1A',
+    color: color.ink,
   },
 });

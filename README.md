@@ -49,6 +49,7 @@ cash finds it.
 ### Features
 
 - **Count stock** — the core loop; profit falls out of it
+- **Review & undo** — catch a bad quantity before save, or undo the latest count
 - **Add stock** — record a delivery, with the price you actually paid
 - **Credit book (izikweletu)** — who owes what, who paid, who has gone quiet
 - **Expenses** — rent, electricity, transport, wages, airtime
@@ -57,6 +58,7 @@ cash finds it.
 - **Recent activity** — what moved, and what's losing money
 - **Backup & restore** — a file you can keep in WhatsApp
 - **English and Zulu**
+- **Count reminder** — the Home screen prompts again after seven days
 
 ---
 
@@ -91,8 +93,9 @@ npm run test:calc     # the profit engine
 npm run test:credit   # the credit book
 npm run test:expenses # expenses and net profit
 npm run test:cashup   # the till reconciliation
-npm run test:schema   # schema creation, reset, and drift
+npm run test:schema   # schema creation, migration safety, and drift
 npm run test:db       # the adapter's real SQL against real SQLite
+npm run test:ui-flow  # critical pilot screen wiring and copy contracts
 ```
 
 `test:db` exists because SQL is just a string: a query with a wrong column name

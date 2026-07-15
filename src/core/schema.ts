@@ -23,28 +23,10 @@ export interface MigrationDb {
 }
 
 /**
- * Bump this whenever the table shape changes. While ALLOW_DESTRUCTIVE_RESET is
- * on, bumping it is all you need to do -- the app rebuilds itself on next boot.
+ * Bump this whenever the table shape changes. Every bump after the first pilot
+ * build must add a migration below; shop data is never reset to change shape.
  */
 export const SCHEMA_VERSION = 5;
-
-/**
- * ⚠️  PRE-RELEASE ONLY. THIS ERASES THE DATABASE.
- *
- * ShopTrack has no users yet, so schema changes should cost nothing: bump
- * SCHEMA_VERSION and the next boot drops every table and rebuilds. That keeps
- * feature work fast while the shape is still moving.
- *
- * BEFORE THE FIRST PILOT INSTALL, set this to false.
- *
- * Leaving it true once a shop has counted real stock means their books are
- * destroyed by an app update. With it false, a version mismatch throws instead,
- * which forces a real migration to be written -- the failure you want.
- *
- * See docs/BEFORE-PILOT.md, tripwire 1. It also records the SQLite table-rebuild
- * gotchas you will need the day you write that first migration.
- */
-const ALLOW_DESTRUCTIVE_RESET = true;
 
 const CREATE_PRODUCTS = `
   CREATE TABLE IF NOT EXISTS products (
@@ -201,26 +183,64 @@ const CREATE_INDEXES = `
 `;
 
 
-// Children before parents, so foreign keys never block the drop.
-const DROP_ALL = `
-  DROP TABLE IF EXISTS cash_ups;
-  DROP TABLE IF EXISTS expenses;
-  DROP TABLE IF EXISTS credit_entries;
-  DROP TABLE IF EXISTS customers;
-  DROP TABLE IF EXISTS stock_movements;
-  DROP TABLE IF EXISTS count_sessions;
-  DROP TABLE IF EXISTS products;
-`;
+/**
+ * Upgrade a database created by an earlier committed ShopTrack schema.
+ *
+ * Versions 2→3 and 3→4 only added tables. Version 4→5 added the nullable
+ * due_at column. They are intentionally small, additive migrations: all rows
+ * remain in place and a partially completed v4→5 step can safely resume.
+ */
+async function migrateDatabase(db: MigrationDb, fromVersion: number): Promise<void> {
+  let version = fromVersion;
+
+  if (version < 2 || version > SCHEMA_VERSION) {
+    throw new Error(
+      `Database is at unsupported schema v${version}; app expects v${SCHEMA_VERSION}. ` +
+      `ShopTrack refused to alter or erase it. Restore a compatible backup or upgrade through a supported build.`
+    );
+  }
+
+  if (version === 2) {
+    await db.withTransactionAsync(async () => {
+      await db.execAsync(CREATE_EXPENSES);
+      await db.execAsync('PRAGMA user_version = 3;');
+    });
+    version = 3;
+  }
+
+  if (version === 3) {
+    await db.withTransactionAsync(async () => {
+      await db.execAsync(CREATE_CASH_UPS);
+      await db.execAsync('PRAGMA user_version = 4;');
+    });
+    version = 4;
+  }
+
+  if (version === 4) {
+    await db.withTransactionAsync(async () => {
+      const columns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(credit_entries)');
+      if (!columns.some(column => column.name === 'due_at')) {
+        await db.execAsync('ALTER TABLE credit_entries ADD COLUMN due_at INTEGER;');
+      }
+      await db.execAsync('PRAGMA user_version = 5;');
+    });
+    version = 5;
+  }
+
+  if (version !== SCHEMA_VERSION) {
+    throw new Error(`No migration path from schema v${fromVersion} to v${SCHEMA_VERSION}.`);
+  }
+}
 
 /**
- * Create the tables, resetting first if the on-device shape is out of date.
- *
- * A database created by an older SCHEMA_VERSION is dropped and rebuilt, so
- * changing the schema during development costs one bump and nothing else.
- * See ALLOW_DESTRUCTIVE_RESET -- this must be turned off before real shops
- * put data in.
+ * Create a fresh database or migrate a supported existing one without data
+ * loss. An unknown schema fails closed: showing an error is safer than silently
+ * replacing a shop's books.
  */
 export async function initDatabase(db: MigrationDb) {
+  // SQLite disables foreign keys per connection by default. Turn them on
+  // before any transaction so restores and normal writes cannot create orphans.
+  await db.execAsync('PRAGMA foreign_keys = ON;');
   const version = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version');
   const current = version?.user_version ?? 0;
 
@@ -229,19 +249,10 @@ export async function initDatabase(db: MigrationDb) {
   const existing = await db.getAllAsync<{ name: string }>(
     `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'products'`
   );
-  const isStale = existing.length > 0 && current !== SCHEMA_VERSION;
+  const isFresh = existing.length === 0;
 
-  if (isStale) {
-    if (!ALLOW_DESTRUCTIVE_RESET) {
-      throw new Error(
-        `Database is at schema v${current}, app expects v${SCHEMA_VERSION}. ` +
-        `Destructive reset is disabled, so a migration is required to avoid data loss.`
-      );
-    }
-    console.warn(
-      `[schema] Rebuilding database: v${current} -> v${SCHEMA_VERSION}. All local data is being erased.`
-    );
-    await db.execAsync(DROP_ALL);
+  if (!isFresh && current !== SCHEMA_VERSION) {
+    await migrateDatabase(db, current);
   }
 
   await db.execAsync(CREATE_PRODUCTS);

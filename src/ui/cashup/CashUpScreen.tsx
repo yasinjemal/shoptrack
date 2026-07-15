@@ -59,6 +59,7 @@ import { styles } from '../styles';
 import { cashUpStyles as cu } from './styles';
 
 export interface CashUpStrings {
+  ERROR_TITLE: string;
   CASHUP_TITLE: string;
   CASHUP_FIRST_TITLE: string;
   CASHUP_FIRST_HINT: string;
@@ -86,6 +87,12 @@ export interface CashUpStrings {
   CASHUP_DONE: string;
   CASHUP_HISTORY: string;
   CASHUP_CANCEL: string;
+  CASHUP_FLOAT: string;
+  CASHUP_STATEMENT_BALANCED: string;
+  CASHUP_STATEMENT_OVER: (amount: string) => string;
+  CASHUP_STATEMENT_SHORT_LARGE: (amount: string) => string;
+  CASHUP_STATEMENT_SHORT_SMALL: (amount: string) => string;
+  FORMAT_WHEN: (ts: number) => string;
   ERROR_GENERIC: string;
 }
 
@@ -170,7 +177,7 @@ export function CashUpScreen({
       });
     } catch (error) {
       console.error('Cash up load error:', error);
-      Alert.alert('Error', strings.ERROR_GENERIC);
+      Alert.alert(strings.ERROR_TITLE, strings.ERROR_GENERIC);
     }
   }, [db, strings.ERROR_GENERIC]);
 
@@ -201,7 +208,7 @@ export function CashUpScreen({
       onBack();
     } catch (error) {
       console.error('Cash up save error:', error);
-      Alert.alert('Error', strings.ERROR_GENERIC);
+      Alert.alert(strings.ERROR_TITLE, strings.ERROR_GENERIC);
       setSaving(false);
     }
   };
@@ -215,7 +222,7 @@ export function CashUpScreen({
       onBack();
     } catch (error) {
       console.error('Cash up save error:', error);
-      Alert.alert('Error', strings.ERROR_GENERIC);
+      Alert.alert(strings.ERROR_TITLE, strings.ERROR_GENERIC);
       setSaving(false);
     }
   };
@@ -267,7 +274,7 @@ export function CashUpScreen({
         <ScrollView style={cu.form}>
           <Text style={cu.question}>{strings.CASHUP_QUESTION}</Text>
           <Text style={cu.hint}>{strings.CASHUP_HINT}</Text>
-          <Text style={cu.since}>{strings.CASHUP_SINCE(formatWhen(step.since))}</Text>
+          <Text style={cu.since}>{strings.CASHUP_SINCE(strings.FORMAT_WHEN(step.since))}</Text>
 
           {!step.hasCount && (
             <Text style={cu.warning}>{strings.CASHUP_NO_COUNT_WARNING}</Text>
@@ -327,7 +334,7 @@ export function CashUpScreen({
             {result.verdict !== 'balanced' && (
               <Text style={cu.verdictAmount}>R{Math.abs(result.difference).toFixed(2)}</Text>
             )}
-            <Text style={cu.verdictStatement}>{result.statement}</Text>
+            <Text style={cu.verdictStatement}>{describeResult(result, strings)}</Text>
           </View>
 
           {/* The sum is the argument: an owner told they are short deserves to
@@ -419,16 +426,25 @@ function Header({
   );
 }
 
+function describeResult(result: CashUpResult, strings: CashUpStrings): string {
+  if (result.verdict === 'balanced') return strings.CASHUP_STATEMENT_BALANCED;
+  const amount = `R${Math.abs(result.difference).toFixed(2)}`;
+  if (result.verdict === 'over') return strings.CASHUP_STATEMENT_OVER(amount);
+  return result.severity === 'large'
+    ? strings.CASHUP_STATEMENT_SHORT_LARGE(amount)
+    : strings.CASHUP_STATEMENT_SHORT_SMALL(amount);
+}
+
 function History({ history, strings }: { history: CashUp[]; strings: CashUpStrings }) {
   return (
     <View style={cu.historySection}>
       <Text style={cu.historyTitle}>{strings.CASHUP_HISTORY}</Text>
       {history.map(h => (
         <View key={h.id} style={cu.historyRow}>
-          <Text style={cu.historyDate}>{formatWhen(h.recorded_at)}</Text>
+          <Text style={cu.historyDate}>{strings.FORMAT_WHEN(h.recorded_at)}</Text>
           <Text style={cu.historyCounted}>R{h.counted_amount.toFixed(2)}</Text>
           {h.is_opening ? (
-            <Text style={cu.historyOpening}>float</Text>
+            <Text style={cu.historyOpening}>{strings.CASHUP_FLOAT}</Text>
           ) : (
             <Text
               style={[
@@ -446,18 +462,4 @@ function History({ history, strings }: { history: CashUp[]; strings: CashUpStrin
       ))}
     </View>
   );
-}
-
-function formatWhen(ts: number): string {
-  const d = new Date(ts);
-  const today = new Date();
-  const sameDay =
-    d.getFullYear() === today.getFullYear() &&
-    d.getMonth() === today.getMonth() &&
-    d.getDate() === today.getDate();
-
-  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-  if (sameDay) return time;
-
-  return `${d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}, ${time}`;
 }

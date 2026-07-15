@@ -209,6 +209,7 @@ console.log('Anomaly Type:', impossibleResult.anomaly_type || 'None');
 console.log('');
 
 console.assert(impossibleResult.estimated_sold === 0, 'Negative sales should be clamped to 0');
+console.assert(impossibleResult.estimated_profit === 0, 'Negative sales must never create negative profit');
 console.assert(impossibleResult.has_anomaly === true, 'Should flag anomaly');
 console.assert(impossibleResult.anomaly_type === 'IMPOSSIBLE_GAIN', 'Should be IMPOSSIBLE_GAIN');
 
