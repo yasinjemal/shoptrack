@@ -85,6 +85,19 @@ function historicalSchema(
 ): string {
   let sql = readFileSync(join(REPO_ROOT, 'database', 'schema.sql'), 'utf8');
 
+  // Everything after v6 is stripped unconditionally: every historical era
+  // these tests reconstruct predates the settings table (v7), the mobile-money
+  // columns (v8), and staff mode (v9).
+  sql = sql
+    .replace(/CREATE TABLE settings[\s\S]*?\);\r?\n/m, '')
+    .replace(/CREATE TABLE staff_members[\s\S]*?\);\r?\n/m, '')
+    .replace(/^CREATE INDEX idx_staff_active[^\n]*\r?\n/m, '')
+    .replace(/^CREATE UNIQUE INDEX idx_products_barcode[^\n]*\r?\n/m, '')
+    .replace(/^\s*barcode\s+TEXT,[^\n]*\r?\n/m, '')
+    .replace(/^\s*payment_method\s+TEXT,[^\n]*\r?\n/m, '')
+    .replace(/^\s*digital_takings\s+REAL,[^\n]*\r?\n/m, '')
+    .replace(/^\s*recorded_by\s+INTEGER REFERENCES staff_members\(id\),[^\n]*\r?\n/gm, '');
+
   if (omit.withoutDueAt) {
     sql = sql.replace(/^\s*due_at\s+INTEGER,\r?\n/m, '');
   }
@@ -105,6 +118,8 @@ const TABLES = [
   'expenses',
   'cash_ups',
   'sales_entries',
+  'settings',
+  'staff_members',
 ];
 
 async function run() {
@@ -121,6 +136,21 @@ async function run() {
   check(cols.includes('buy_price_at_time'), 'buy_price_at_time exists');
   check(cols.includes('sell_price_at_time'), 'sell_price_at_time exists');
   check(!cols.includes('movement_type'), 'no legacy movement_type column');
+  const productCols = (freshRaw.prepare('PRAGMA table_info(products)').all() as ColumnInfo[])
+    .map(c => c.name);
+  check(productCols.includes('barcode'), 'products.barcode exists');
+
+  freshRaw.exec(`INSERT INTO products (name, barcode) VALUES ('One', '600100000001')`);
+  let duplicateBarcodeRejected = false;
+  try { freshRaw.exec(`INSERT INTO products (name, barcode) VALUES ('Two', '600100000001')`); }
+  catch { duplicateBarcodeRejected = true; }
+  check(duplicateBarcodeRejected, 'one barcode cannot identify two products');
+  freshRaw.exec('DELETE FROM products');
+  const indexes = (freshRaw.prepare(
+    `SELECT name FROM sqlite_master WHERE type = 'index'`
+  ).all() as Array<{ name: string }>).map(row => row.name);
+  check(indexes.includes('idx_movements_product_type_date'), 'movement history has a composite product/type/date index');
+  check(indexes.includes('idx_credit_customer_date'), 'credit history has a composite customer/date index');
 
   const version = freshRaw.prepare('PRAGMA user_version').get() as { user_version: number };
   equal(version.user_version, SCHEMA_VERSION, `user_version stamped to ${SCHEMA_VERSION}`);
@@ -302,7 +332,7 @@ async function run() {
   equal(
     (v5Raw.prepare('PRAGMA user_version').get() as { user_version: number }).user_version,
     SCHEMA_VERSION,
-    'the migrated database is stamped v6'
+    'the migrated database is stamped current'
   );
   check(
     describe(v5Raw, 'sales_entries') === describe(freshRaw, 'sales_entries'),
@@ -319,6 +349,62 @@ async function run() {
     duplicateRejected = true;
   }
   check(duplicateRejected, 'the migrated sales book still rejects a duplicate month');
+
+  console.log('');
+  console.log('========================================');
+  console.log('TEST: a v6 pilot-era database gains settings, money columns and staff');
+  console.log('========================================');
+
+  // The upgrade that runs on a phone carrying the sales-book build: v6 had
+  // every table except settings and staff_members, and none of the v8/v9
+  // columns.
+  const v6Raw = new DatabaseSync(':memory:');
+  v6Raw.exec(historicalSchema({}));
+  v6Raw.exec('PRAGMA user_version = 6;');
+  v6Raw.exec(`
+    INSERT INTO products (id, name, current_qty, created_at, updated_at) VALUES (99, 'Bread', 5, 1, 1);
+    INSERT INTO customers (id, name, created_at, updated_at) VALUES (1, 'Thandi', 1, 1);
+    INSERT INTO credit_entries (id, customer_id, type, amount, recorded_at) VALUES (1, 1, 'PAYMENT', 40, 2);
+    INSERT INTO cash_ups (id, counted_amount, expected_amount, difference, recorded_at) VALUES (1, 50, 50, 0, 2);
+    INSERT INTO count_sessions (id, started_at, completed_at) VALUES (1, 1, 2);
+    INSERT INTO sales_entries (period, period_key, amount, margin_pct, recorded_at) VALUES ('MONTH', '2026-01', 48000, 25, 1);
+  `);
+
+  await initDatabase(adapt(v6Raw));
+
+  equal(
+    (v6Raw.prepare('PRAGMA user_version').get() as { user_version: number }).user_version,
+    SCHEMA_VERSION,
+    'a v6 database reaches the current version'
+  );
+  for (const table of TABLES) {
+    check(describe(v6Raw, table) === describe(freshRaw, table), `v6 -> current: ${table} has the current shape`);
+  }
+  equal(
+    (v6Raw.prepare('SELECT amount as value FROM credit_entries WHERE id = 1').get() as { value: number }).value,
+    40,
+    'v6 credit data survives'
+  );
+  equal(
+    (v6Raw.prepare('SELECT payment_method as value FROM credit_entries WHERE id = 1').get() as { value: unknown }).value,
+    null,
+    'pre-v8 payments read as unrecorded method, not a guess'
+  );
+  equal(
+    (v6Raw.prepare('SELECT digital_takings as value FROM cash_ups WHERE id = 1').get() as { value: unknown }).value,
+    null,
+    'pre-v8 cash-ups read as unrecorded digital takings'
+  );
+  equal(
+    (v6Raw.prepare('SELECT recorded_by as value FROM count_sessions WHERE id = 1').get() as { value: unknown }).value,
+    null,
+    'pre-v9 counts belong to nobody in particular'
+  );
+  equal(
+    (v6Raw.prepare("SELECT COUNT(*) as c FROM sales_entries WHERE period_key = '2026-01'").get() as { c: number }).c,
+    1,
+    'v6 sales book survives'
+  );
 
   console.log('');
   console.log('========================================');

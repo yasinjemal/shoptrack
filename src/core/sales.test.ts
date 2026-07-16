@@ -104,9 +104,10 @@ equal(january.margin_pct, 25, 'the margin is reported back');
 equal(january.source, 'month', 'the source is a month total');
 equal(january.days_recorded, 0, 'no individual days');
 equal(january.has_conflict, false, 'nothing to conflict with');
-check(january.statement.includes('R48000.00'), 'the statement names the takings');
-check(january.statement.includes('R12000.00'), 'and the profit');
-check(january.statement.includes('one month total'), 'and says where the number came from');
+equal(january.statement.kind, 'summary', 'the statement is a structured summary');
+check(january.statement.kind === 'summary' && january.statement.sales === 48000, 'the statement carries takings');
+check(january.statement.kind === 'summary' && january.statement.profit === 12000, 'and the profit');
+check(january.statement.kind === 'summary' && january.statement.source === 'month', 'and says where the number came from');
 
 // ============================================
 console.log('');
@@ -123,7 +124,7 @@ equal(daily.sales, 4000, 'days add up');
 equal(daily.profit, 1000, 'profit is 25% of the days');
 equal(daily.source, 'days', 'the source is individual days');
 equal(daily.days_recorded, 3, 'and it says how many');
-check(daily.statement.includes('3 days recorded'), 'the statement says how many days');
+check(daily.statement.kind === 'summary' && daily.statement.days_recorded === 3, 'the statement says how many days');
 
 // Days from other months must not leak in.
 const scoped = calculateMonth('2026-07', [
@@ -182,7 +183,7 @@ equal(nothing.source, 'none', 'no data is its own state');
 equal(nothing.sales, 0, 'no takings');
 equal(nothing.profit, 0, 'no profit, and not NaN');
 equal(nothing.margin_pct, 0, 'no margin to report');
-check(nothing.statement.includes('Nothing recorded'), 'and it says so plainly');
+equal(nothing.statement.kind, 'empty', 'and it says so plainly');
 
 // ============================================
 console.log('');
@@ -223,11 +224,8 @@ equal(mar.profit, 10000, 'March used its own 20% margin, not the book average');
 
 check(history.average_margin_pct > 24 && history.average_margin_pct < 26, 'average margin is weighted, not a mean of margins');
 
-equal(
-  summariseSalesBook(history),
-  'R60850.00 profit across 6 months.',
-  'the Home line reads naturally'
-);
+equal(summariseSalesBook(history)?.profit, 60850, 'the Home summary carries profit as data');
+equal(summariseSalesBook(history)?.months, 6, 'the Home summary carries its month count');
 
 // ============================================
 console.log('');
@@ -242,10 +240,7 @@ equal(empty.average_margin_pct, 0, 'no margin to average');
 equal(summariseSalesBook(empty), null, 'no card on Home when there is nothing to show');
 
 const onlyMonth = calculateSalesHistory([month('2026-01', 1000, 25)]);
-check(
-  summariseSalesBook(onlyMonth)!.includes('1 month'),
-  'a single month reads as "1 month", not "1 months"'
-);
+equal(summariseSalesBook(onlyMonth)?.months, 1, 'a single month stays a numeric count for translation');
 
 // ============================================
 console.log('');

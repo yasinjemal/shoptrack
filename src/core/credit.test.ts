@@ -69,7 +69,7 @@ equal(settled.total_credit, 90, 'total credit adds up');
 equal(settled.total_paid, 90, 'total paid adds up');
 equal(settled.balance, 0, 'settling in full clears the balance');
 equal(settled.is_stale, false, 'a paid-up account is never stale');
-equal(settled.statement, 'Thandi is all paid up.', 'says the account is clear');
+equal(settled.statement.kind, 'paid_up', 'says the account is clear without display copy');
 
 // ============================================
 console.log('');
@@ -85,7 +85,8 @@ const owing = calculateCustomerBalance(THANDI, [
 equal(owing.balance, 90, 'balance is credit minus payments');
 equal(owing.days_since_activity, 3, 'days since last activity uses the newest entry');
 equal(owing.is_stale, false, 'recent activity is not stale');
-equal(owing.statement, 'Thandi owes R90.00.', 'states what is owed');
+equal(owing.statement.kind, 'owes', 'states what is owed');
+equal('amount' in owing.statement ? owing.statement.amount : null, 90, 'keeps the raw amount currency-free');
 
 // ============================================
 console.log('');
@@ -100,7 +101,8 @@ const stale = calculateCustomerBalance(SIPHO, [
 equal(stale.balance, 200, 'balance survives with no payments');
 equal(stale.days_since_activity, 60, 'counts days since the debt was taken');
 equal(stale.is_stale, true, `60 days is past the ${STALE_AFTER_DAYS}-day mark`);
-check(stale.statement.includes('has not paid anything for 60 days'), 'statement flags the silence');
+equal(stale.statement.kind, 'stale', 'statement flags the silence');
+equal('days' in stale.statement ? stale.statement.days : null, 60, 'statement carries the quiet-day count');
 
 // Boundary: exactly at the threshold counts as stale, one day short does not.
 const atEdge = calculateCustomerBalance(SIPHO, [
@@ -126,7 +128,7 @@ const overpaid = calculateCustomerBalance(NOMSA, [
 
 equal(overpaid.balance, -10, 'overpayment produces a negative balance');
 equal(overpaid.is_stale, false, 'a credit balance is never stale');
-equal(overpaid.statement, 'You owe Nomsa R10.00 in change.', 'explains the debt runs the other way');
+equal(overpaid.statement.kind, 'change_owed', 'explains the debt runs the other way');
 
 // ============================================
 console.log('');
@@ -170,6 +172,16 @@ equal(summary.customers_stale, 1, 'finds the one quiet debt');
 // Period figures cover the week; balances cover all time.
 equal(summary.credit_given, 120, 'credit given counts only this week');
 equal(summary.payments_received, 30, 'payments received count only this week');
+equal(summary.cash_payments_received, 30, 'legacy unlabelled payments remain cash-compatible');
+equal(summary.digital_payments_received, 0, 'no digital payment is invented');
+
+const digitalBook = calculateCreditSummary([THANDI], [
+  entry({ customer_id: 1, type: 'PAYMENT', amount: 70, payment_method: 'MOBILE_MONEY', recorded_at: daysAgo(1) }),
+  entry({ customer_id: 1, type: 'PAYMENT', amount: 30, payment_method: 'CASH', recorded_at: daysAgo(1) }),
+], week.start, week.end, NOW);
+equal(digitalBook.payments_received, 100, 'all payment rails still add to the book');
+equal(digitalBook.cash_payments_received, 30, 'cash rail is split for the drawer');
+equal(digitalBook.digital_payments_received, 70, 'mobile money is split for the phone');
 
 equal(summary.owing.length, 2, 'the "who owes me" list drops paid-up customers');
 equal(summary.owing[0].customer_name, 'Sipho', 'biggest debt is listed first');
@@ -201,14 +213,11 @@ equal(freshBook.owing.length, 0, 'a new person owes nothing, so is not in "who o
 equal(freshBook.everyone.length, 1, 'but they ARE in the list the screen renders');
 equal(freshBook.everyone[0].customer_name, 'Lerato', 'and it is them');
 equal(freshBook.everyone[0].balance, 0, 'with a zero balance');
-equal(freshBook.everyone[0].statement, 'Lerato is all paid up.', 'described sensibly');
+equal(freshBook.everyone[0].statement.kind, 'paid_up', 'described sensibly');
 equal(summariseOutstanding(freshBook), null, 'and no outstanding card is shown');
 
-equal(
-  summariseOutstanding(summary),
-  'R290.00 is owed to you by 2 people.',
-  'home line reads naturally'
-);
+equal(summariseOutstanding(summary)?.amount, 290, 'home summary carries the amount as data');
+equal(summariseOutstanding(summary)?.people, 2, 'home summary carries the people count');
 
 // ============================================
 console.log('');
@@ -230,11 +239,7 @@ equal(summariseOutstanding(allPaid), null, 'no card shown when the book is settl
 const onePerson = calculateCreditSummary([THANDI], [
   entry({ customer_id: 1, type: 'CREDIT', amount: 90, recorded_at: daysAgo(2) }),
 ], week.start, week.end, NOW);
-equal(
-  summariseOutstanding(onePerson),
-  'R90.00 is owed to you by 1 person.',
-  'one debtor reads as "1 person"'
-);
+equal(summariseOutstanding(onePerson)?.people, 1, 'one debtor stays a numeric count for translation');
 
 // ============================================
 console.log('');
@@ -255,10 +260,8 @@ const brokePromise = calculateCustomerBalance(THANDI, [
 equal(brokePromise.is_overdue, true, 'a passed promise with money still owed is overdue');
 equal(brokePromise.days_overdue, 3, 'counts days past the promise');
 equal(brokePromise.due_at, daysAgo(3), 'reports the day they named');
-check(
-  brokePromise.statement.includes('was meant to pay 3 days ago'),
-  'the statement names the broken promise'
-);
+equal(brokePromise.statement.kind, 'overdue', 'the statement names the broken promise');
+equal('days' in brokePromise.statement ? brokePromise.statement.days : null, 3, 'the overdue fact carries three days');
 
 const notYetDue = calculateCustomerBalance(THANDI, [
   entry({

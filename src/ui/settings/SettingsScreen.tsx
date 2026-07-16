@@ -1,0 +1,397 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  SafeAreaView,
+  ScrollView,
+  Share,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { StatusBar } from 'expo-status-bar';
+import type { SQLiteDatabase } from 'expo-sqlite';
+
+import { COUNTRY_PACKS, COUNTRY_PACK_CODES, type CountryPackCode } from '../../core/countryPacks';
+import { CURRENCIES, CURRENCY_CODES, type CurrencyCode } from '../../core/currency';
+import {
+  addStaffMember,
+  deactivateStaffMember,
+  getSetting,
+  loadStaffMembers,
+  restoreBackup,
+  setSetting,
+  type StaffMember,
+} from '../../core/db';
+import { LANGUAGE_OPTIONS, type Language, type Strings } from '../../i18n';
+import {
+  downloadEncryptedBackup,
+  generateRecoveryPhrase,
+  HttpCloudBackupStore,
+  isValidRecoveryPhrase,
+  loadRememberedRecoveryPhrase,
+  rememberRecoveryPhrase,
+  uploadEncryptedBackup,
+} from '../../net/cloudBackup';
+import { color, elevation, radius, space } from '../theme';
+import { refreshActivationMetric } from '../../app/activation';
+import {
+  buildPartnerActivationExport,
+  normaliseReferralCode,
+  PARTNER_REFERRAL_SETTING,
+} from '../../core/partner';
+
+export function SettingsScreen({
+  db,
+  strings,
+  language,
+  currency,
+  countryPack,
+  onBack,
+  onLanguageChange,
+  onCurrencyChange,
+  onCountryPackChange,
+  onDataRestored,
+}: {
+  db: SQLiteDatabase;
+  strings: Strings;
+  language: Language;
+  currency: CurrencyCode;
+  countryPack: CountryPackCode;
+  onBack: () => void;
+  onLanguageChange: (language: Language) => Promise<void>;
+  onCurrencyChange: (currency: CurrencyCode) => Promise<void>;
+  onCountryPackChange: (country: CountryPackCode) => Promise<void>;
+  onDataRestored: () => Promise<void>;
+}) {
+  const [phrase, setPhrase] = useState('');
+  const [restorePhrase, setRestorePhrase] = useState('');
+  const [remembered, setRemembered] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [staff, setStaff] = useState<StaffMember[]>([]);
+  const [staffName, setStaffName] = useState('');
+  const [staffPin, setStaffPin] = useState('');
+  const [partnerCode, setPartnerCode] = useState('');
+  const cloudUrl = process.env.EXPO_PUBLIC_CLOUD_BACKUP_URL;
+  const store = useMemo(() => cloudUrl ? new HttpCloudBackupStore(cloudUrl) : null, [cloudUrl]);
+
+  useEffect(() => {
+    void loadRememberedRecoveryPhrase().then(value => {
+      if (value) {
+        setPhrase(value);
+        setRemembered(true);
+      }
+    });
+  }, []);
+
+  const refreshStaff = async () => setStaff(await loadStaffMembers(db));
+
+  useEffect(() => { void refreshStaff(); }, [db]);
+
+  useEffect(() => {
+    void getSetting(db, PARTNER_REFERRAL_SETTING).then(value => setPartnerCode(value ?? ''));
+  }, [db]);
+
+  const addStaff = async () => {
+    try {
+      await addStaffMember(db, staffName, staffPin);
+      setStaffName('');
+      setStaffPin('');
+      await refreshStaff();
+    } catch {
+      Alert.alert(strings.ERROR_TITLE, strings.ERROR_GENERIC);
+    }
+  };
+
+  const createPhrase = async () => {
+    setPhrase(await generateRecoveryPhrase());
+    setRemembered(false);
+  };
+
+  const confirmPhrase = async () => {
+    await rememberRecoveryPhrase(phrase);
+    setRemembered(true);
+  };
+
+  const upload = async () => {
+    if (!store || !remembered) return;
+    setBusy(true);
+    try {
+      await uploadEncryptedBackup(db, store, phrase);
+      Alert.alert(strings.CLOUD_UPLOAD_DONE);
+    } catch {
+      Alert.alert(strings.ERROR_TITLE, strings.CLOUD_ERROR);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const download = async () => {
+    if (!store) return;
+    if (!isValidRecoveryPhrase(restorePhrase)) {
+      Alert.alert(strings.CLOUD_BAD_PHRASE);
+      return;
+    }
+    setBusy(true);
+    try {
+      const backup = await downloadEncryptedBackup(store, restorePhrase);
+      Alert.alert(strings.CLOUD_RESTORE_READY, strings.CLOUD_RESTORE_READY_HINT, [
+        { text: strings.CANCEL, style: 'cancel' },
+        {
+          text: strings.RESTORE_ACTION,
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await restoreBackup(db, backup);
+              await onDataRestored();
+              Alert.alert(strings.CLOUD_RESTORE_DONE);
+            } catch {
+              Alert.alert(strings.ERROR_TITLE, strings.CLOUD_ERROR);
+            }
+          },
+        },
+      ]);
+    } catch {
+      Alert.alert(strings.ERROR_TITLE, strings.CLOUD_ERROR);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <SafeAreaView style={settingsStyles.container}>
+      <StatusBar style="dark" />
+      <View style={settingsStyles.header}>
+        <TouchableOpacity onPress={onBack}><Text style={settingsStyles.back}>{strings.BACK}</Text></TouchableOpacity>
+        <Text style={settingsStyles.title}>{strings.SETTINGS}</Text>
+        <View style={{ width: 50 }} />
+      </View>
+      <ScrollView contentContainerStyle={settingsStyles.content}>
+        <Section title={strings.COUNTRY_PACK} hint={strings.COUNTRY_PACK_HINT}>
+          {COUNTRY_PACK_CODES.map(code => (
+            <Choice
+              key={code}
+              label={`${COUNTRY_PACKS[code].name} · ${COUNTRY_PACKS[code].currency}`}
+              selected={countryPack === code}
+              onPress={() => onCountryPackChange(code)}
+            />
+          ))}
+        </Section>
+
+        <Section title={strings.CURRENCY_LABEL}>
+          <View style={settingsStyles.wrap}>
+            {CURRENCY_CODES.map(code => (
+              <Choice
+                compact
+                key={code}
+                label={`${code} ${CURRENCIES[code].symbol}`}
+                selected={currency === code}
+                onPress={() => onCurrencyChange(code)}
+              />
+            ))}
+          </View>
+        </Section>
+
+        <Section title={strings.LANGUAGE_LABEL}>
+          {LANGUAGE_OPTIONS.map(option => (
+            <Choice
+              key={option.code}
+              label={option.label}
+              detail={option.reviewed ? undefined : strings.LANGUAGE_REVIEW_PENDING}
+              selected={language === option.code}
+              disabled={!option.reviewed}
+              onPress={() => onLanguageChange(option.code)}
+            />
+          ))}
+        </Section>
+
+        <Section title={strings.STAFF_MODE} hint={strings.STAFF_MODE_HINT}>
+          {staff.map(member => (
+            <View key={member.id} style={settingsStyles.staffRow}>
+              <Text style={settingsStyles.choiceText}>{member.name}</Text>
+              <TouchableOpacity onPress={async () => {
+                await deactivateStaffMember(db, member.id);
+                await refreshStaff();
+              }}>
+                <Text style={settingsStyles.remove}>{strings.STAFF_REMOVE}</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
+          <TextInput
+            style={settingsStyles.inputSmall}
+            placeholder={strings.STAFF_NAME}
+            placeholderTextColor={color.inkMuted}
+            value={staffName}
+            onChangeText={setStaffName}
+          />
+          <TextInput
+            style={settingsStyles.inputSmall}
+            placeholder={strings.STAFF_PIN}
+            placeholderTextColor={color.inkMuted}
+            keyboardType="number-pad"
+            secureTextEntry
+            maxLength={4}
+            value={staffPin}
+            onChangeText={value => setStaffPin(value.replace(/\D/g, ''))}
+          />
+          <Choice
+            label={strings.STAFF_ADD}
+            disabled={!staffName.trim() || staffPin.length !== 4}
+            onPress={addStaff}
+          />
+        </Section>
+
+        <Section title={strings.PARTNER_TITLE} hint={strings.PARTNER_HINT}>
+          <TextInput
+            style={settingsStyles.inputSmall}
+            placeholder={strings.PARTNER_CODE}
+            placeholderTextColor={color.inkMuted}
+            autoCapitalize="characters"
+            value={partnerCode}
+            onChangeText={setPartnerCode}
+          />
+          <Choice label={strings.PARTNER_SAVE} onPress={async () => {
+            const clean = normaliseReferralCode(partnerCode);
+            if (!clean) {
+              Alert.alert(strings.PARTNER_BAD_CODE);
+              return;
+            }
+            await setSetting(db, PARTNER_REFERRAL_SETTING, clean);
+            setPartnerCode(clean);
+          }} />
+          <Text style={settingsStyles.hint}>{strings.PARTNER_EXPORT_HINT}</Text>
+          <Choice label={strings.PARTNER_EXPORT} onPress={async () => {
+            const metric = await refreshActivationMetric(db);
+            const referral = await getSetting(db, PARTNER_REFERRAL_SETTING);
+            const payload = buildPartnerActivationExport(metric, referral);
+            await Share.share({ message: JSON.stringify(payload, null, 2) });
+          }} />
+        </Section>
+
+        <Section title={strings.CLOUD_BACKUP_TITLE} hint={strings.CLOUD_BACKUP_HINT}>
+          {!store ? (
+            <Text style={settingsStyles.warning}>{strings.CLOUD_BACKEND_MISSING}</Text>
+          ) : (
+            <>
+              {!phrase && <Choice label={strings.CLOUD_CREATE_PHRASE} onPress={createPhrase} />}
+              {!!phrase && (
+                <>
+                  <Text style={settingsStyles.warning}>{strings.CLOUD_PHRASE_WARNING}</Text>
+                  <Text selectable style={settingsStyles.phrase}>{phrase}</Text>
+                  {!remembered ? (
+                    <Choice label={strings.CLOUD_WROTE_PHRASE} onPress={confirmPhrase} />
+                  ) : (
+                    <Text style={settingsStyles.success}>{strings.CLOUD_PHRASE_SAVED}</Text>
+                  )}
+                  <Choice
+                    label={strings.CLOUD_UPLOAD}
+                    disabled={!remembered || busy}
+                    onPress={upload}
+                  />
+                </>
+              )}
+              <TextInput
+                style={settingsStyles.input}
+                multiline
+                placeholder={strings.CLOUD_RESTORE_PHRASE}
+                placeholderTextColor={color.inkMuted}
+                value={restorePhrase}
+                onChangeText={setRestorePhrase}
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <Choice label={strings.CLOUD_DOWNLOAD} disabled={busy} onPress={download} />
+            </>
+          )}
+        </Section>
+      </ScrollView>
+    </SafeAreaView>
+  );
+}
+
+function Section({
+  title,
+  hint,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <View style={settingsStyles.section}>
+      <Text style={settingsStyles.sectionTitle}>{title}</Text>
+      {hint && <Text style={settingsStyles.hint}>{hint}</Text>}
+      {children}
+    </View>
+  );
+}
+
+function Choice({
+  label,
+  detail,
+  selected = false,
+  disabled = false,
+  compact = false,
+  onPress,
+}: {
+  label: string;
+  detail?: string;
+  selected?: boolean;
+  disabled?: boolean;
+  compact?: boolean;
+  onPress: () => void | Promise<void>;
+}) {
+  return (
+    <TouchableOpacity
+      style={[
+        settingsStyles.choice,
+        compact && settingsStyles.compact,
+        selected && settingsStyles.selected,
+        disabled && settingsStyles.disabled,
+      ]}
+      disabled={disabled}
+      onPress={() => void onPress()}
+    >
+      <Text style={[settingsStyles.choiceText, selected && settingsStyles.selectedText]}>{label}</Text>
+      {detail && <Text style={settingsStyles.detail}>{detail}</Text>}
+    </TouchableOpacity>
+  );
+}
+
+const settingsStyles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: color.canvas },
+  header: {
+    minHeight: 64, paddingHorizontal: space.base, flexDirection: 'row',
+    alignItems: 'center', justifyContent: 'space-between', backgroundColor: color.surface,
+  },
+  back: { color: color.infoInk, fontSize: 17, fontWeight: '700' },
+  title: { color: color.ink, fontSize: 22, fontWeight: '800' },
+  content: { padding: space.base, gap: space.base, paddingBottom: space['3xl'] },
+  section: {
+    padding: space.base, gap: space.sm, borderRadius: radius.lg,
+    backgroundColor: color.surface, ...elevation.card,
+  },
+  sectionTitle: { color: color.ink, fontSize: 20, fontWeight: '800' },
+  hint: { color: color.inkSecondary, fontSize: 15, lineHeight: 21, marginBottom: space.xs },
+  wrap: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
+  choice: {
+    minHeight: 52, borderWidth: 1, borderColor: color.borderStrong,
+    borderRadius: radius.md, paddingHorizontal: space.md, paddingVertical: space.sm,
+    justifyContent: 'center', backgroundColor: color.surface,
+  },
+  compact: { minWidth: '46%', flexGrow: 1 },
+  selected: { borderColor: color.green, backgroundColor: color.greenSoft, borderWidth: 2 },
+  disabled: { opacity: 0.55, backgroundColor: color.surfaceSunken },
+  choiceText: { color: color.ink, fontSize: 17, fontWeight: '700' },
+  selectedText: { color: color.greenInk },
+  detail: { color: color.inkMuted, fontSize: 13, marginTop: 2 },
+  warning: { color: color.amberInk, backgroundColor: color.amberSoft, padding: space.md, borderRadius: radius.md, lineHeight: 21 },
+  success: { color: color.greenInk, backgroundColor: color.greenSoft, padding: space.md, borderRadius: radius.md },
+  phrase: { color: color.ink, fontSize: 19, lineHeight: 30, fontWeight: '700', padding: space.md, borderWidth: 1, borderColor: color.borderStrong, borderRadius: radius.md },
+  input: { minHeight: 90, color: color.ink, fontSize: 16, textAlignVertical: 'top', borderWidth: 1, borderColor: color.borderStrong, borderRadius: radius.md, padding: space.md },
+  inputSmall: { minHeight: 52, color: color.ink, fontSize: 16, borderWidth: 1, borderColor: color.borderStrong, borderRadius: radius.md, padding: space.md },
+  staffRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: color.border },
+  remove: { color: color.redInk, fontSize: 16, fontWeight: '700', padding: space.sm },
+});

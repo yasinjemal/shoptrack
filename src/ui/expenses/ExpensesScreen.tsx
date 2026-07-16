@@ -27,6 +27,7 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import type { SQLiteDatabase } from 'expo-sqlite';
+import { formatMoney, getCurrentCurrency } from '../../core/currency';
 
 import {
   calculateExpenseSummary,
@@ -164,7 +165,7 @@ export function ExpensesScreen({
         <ScrollView style={es.list}>
           <View style={es.totalCard}>
             <Text style={es.totalLabel}>{strings.EXPENSES_MONTH_LABEL}</Text>
-            <Text style={es.totalAmount}>R{summary.total.toFixed(2)}</Text>
+            <Text style={es.totalAmount}>{formatMoney(summary.total)}</Text>
           </View>
 
           {summary.by_category.length > 1 && (
@@ -174,7 +175,7 @@ export function ExpensesScreen({
                   <Text style={es.breakdownIcon}>{CATEGORY_ICONS[c.category]}</Text>
                   <Text style={es.breakdownName}>{strings.CATEGORY_LABEL(c.category)}</Text>
                   <Text style={es.breakdownShare}>{c.share}%</Text>
-                  <Text style={es.breakdownAmount}>R{c.total.toFixed(2)}</Text>
+                  <Text style={es.breakdownAmount}>{formatMoney(c.total)}</Text>
                 </View>
               ))}
             </View>
@@ -191,7 +192,7 @@ export function ExpensesScreen({
                 <Text style={es.expenseCategory}>{strings.CATEGORY_LABEL(e.category)}</Text>
                 {e.notes ? <Text style={es.expenseNote}>{e.notes}</Text> : null}
               </View>
-              <Text style={es.expenseAmount}>R{e.amount.toFixed(2)}</Text>
+              <Text style={es.expenseAmount}>{formatMoney(e.amount)}</Text>
             </TouchableOpacity>
           ))}
 
@@ -269,7 +270,7 @@ function AddExpenseScreen({
 
         <Text style={styles.inputLabel}>{strings.EXPENSES_AMOUNT}</Text>
         <View style={styles.priceInputRow}>
-          <Text style={styles.currencyPrefix}>R</Text>
+          <Text style={styles.currencyPrefix}>{getCurrentCurrency().symbol}</Text>
           <TextInput
             style={styles.priceInput}
             value={amount}

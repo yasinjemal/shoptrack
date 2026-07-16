@@ -1,0 +1,13 @@
+appId: com.yasinali69.ShopTrackApp
+name: Country and currency settings flow
+---
+- launchApp
+- tapOn:
+    id: "home-settings"
+- assertVisible: "Settings"
+- assertVisible: "South Africa · ZAR"
+- tapOn: "Kenya · KES"
+- assertVisible: "KES KSh"
+- assertVisible: "Native-speaker review pending"
+- back
+- assertVisible: "ShopTrack"

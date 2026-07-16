@@ -14,10 +14,10 @@ import {
   calculateProductMetrics,
   calculatePeriodSummary,
   getPeriodBounds,
-  formatCurrency,
   Product,
   StockMovement
 } from './calculations';
+import { formatMoney as formatCurrency } from './currency';
 
 // ============================================
 // ASSERTION HARNESS

@@ -11,7 +11,7 @@
 
 import type { SQLiteDatabase } from 'expo-sqlite';
 import type { Product as CoreProduct, StockMovement } from './calculations';
-import type { CreditEntry, Customer } from './credit';
+import { PAYMENT_METHODS, type CreditEntry, type Customer, type PaymentMethod } from './credit';
 import type { Expense, ExpenseCategory } from './expenses';
 import type { CashUpResult } from './cashup';
 import type { SalesEntry, SalesPeriod } from './sales';
@@ -44,6 +44,7 @@ function requireOptionalNonNegativeNumber(value: number | null | undefined, labe
 export interface AppProduct {
   id: number;
   name: string;
+  barcode?: string | null;
   unit_label: string;
   buy_price: number | null;
   sell_price: number | null;
@@ -99,6 +100,7 @@ export async function addProduct(
   db: SQLiteDatabase,
   details: {
     name: string;
+    barcode?: string | null;
     buyPrice?: number | null;
     sellPrice?: number | null;
     quantity?: number;
@@ -107,6 +109,7 @@ export async function addProduct(
 ): Promise<number> {
   const name = details.name.trim();
   if (!name) throw new Error('Product name is required.');
+  const barcode = details.barcode?.trim() || null;
   const quantity = details.quantity ?? 0;
   requireNonNegativeInteger(quantity, 'Current stock');
   requireOptionalNonNegativeNumber(details.buyPrice, 'Buy price');
@@ -115,9 +118,9 @@ export async function addProduct(
   let productId = 0;
   await db.withTransactionAsync(async () => {
     const result = await db.runAsync(
-      `INSERT INTO products (name, buy_price, sell_price, current_qty, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [name, details.buyPrice ?? null, details.sellPrice ?? null, quantity, now, now]
+      `INSERT INTO products (name, barcode, buy_price, sell_price, current_qty, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [name, barcode, details.buyPrice ?? null, details.sellPrice ?? null, quantity, now, now]
     );
     productId = result.lastInsertRowId;
 
@@ -135,16 +138,29 @@ export async function addProduct(
 export async function updateProduct(
   db: SQLiteDatabase,
   productId: number,
-  details: { name: string; buyPrice?: number | null; sellPrice?: number | null },
+  details: { name: string; barcode?: string | null; buyPrice?: number | null; sellPrice?: number | null },
   now: number = Date.now()
 ): Promise<void> {
   const name = details.name.trim();
   if (!name) throw new Error('Product name is required.');
   requireOptionalNonNegativeNumber(details.buyPrice, 'Buy price');
   requireOptionalNonNegativeNumber(details.sellPrice, 'Sell price');
+  const barcode = details.barcode?.trim() || null;
   await db.runAsync(
-    'UPDATE products SET name = ?, buy_price = ?, sell_price = ?, updated_at = ? WHERE id = ?',
-    [name, details.buyPrice ?? null, details.sellPrice ?? null, now, productId]
+    'UPDATE products SET name = ?, barcode = ?, buy_price = ?, sell_price = ?, updated_at = ? WHERE id = ?',
+    [name, barcode, details.buyPrice ?? null, details.sellPrice ?? null, now, productId]
+  );
+}
+
+export async function findProductByBarcode(
+  db: SQLiteDatabase,
+  barcode: string
+): Promise<AppProduct | null> {
+  const clean = barcode.trim();
+  if (!clean) return null;
+  return db.getFirstAsync<AppProduct>(
+    'SELECT * FROM products WHERE is_active = 1 AND barcode = ? LIMIT 1',
+    [clean]
   );
 }
 
@@ -180,6 +196,37 @@ export async function loadMovements(
       );
 
   return rows.map(toCoreMovement);
+}
+
+export interface RecentProductCount {
+  product_id: number;
+  quantity: number;
+  recorded_at: number;
+}
+
+/** One indexed query for the latest N counts of every product (no N+1 scan). */
+export async function loadRecentProductCounts(
+  db: SQLiteDatabase,
+  perProduct = 3
+): Promise<Map<number, RecentProductCount[]>> {
+  if (!Number.isInteger(perProduct) || perProduct < 1 || perProduct > 20) {
+    throw new Error('Recent count page size must be between 1 and 20.');
+  }
+  const rows = await db.getAllAsync<RecentProductCount>(
+    `SELECT product_id, quantity, recorded_at FROM (
+       SELECT product_id, quantity, recorded_at,
+              ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY recorded_at DESC, id DESC) AS rank
+       FROM stock_movements WHERE type = 'COUNT'
+     ) WHERE rank <= ? ORDER BY product_id, recorded_at DESC`,
+    [perProduct]
+  );
+  const byProduct = new Map<number, RecentProductCount[]>();
+  for (const row of rows) {
+    const counts = byProduct.get(row.product_id) ?? [];
+    counts.push(row);
+    byProduct.set(row.product_id, counts);
+  }
+  return byProduct;
 }
 
 function toCoreMovement(r: MovementRow): StockMovement {
@@ -243,7 +290,8 @@ export async function saveCountSession(
   db: SQLiteDatabase,
   entries: CountEntryInput[],
   totalProducts: number,
-  now: number = Date.now()
+  now: number = Date.now(),
+  options: { recordedBy?: number | null } = {}
 ): Promise<SavedCountSession> {
   if (entries.length === 0) throw new Error('Count at least one product.');
   entries.forEach(entry => requireNonNegativeInteger(entry.quantity, 'Count'));
@@ -252,9 +300,9 @@ export async function saveCountSession(
   await db.withTransactionAsync(async () => {
     const session = await db.runAsync(
       `INSERT INTO count_sessions
-         (started_at, completed_at, products_counted, total_products)
-       VALUES (?, ?, ?, ?)`,
-      [now, now, entries.length, totalProducts]
+         (started_at, completed_at, products_counted, total_products, recorded_by)
+       VALUES (?, ?, ?, ?, ?)`,
+      [now, now, entries.length, totalProducts, options.recordedBy ?? null]
     );
     sessionId = session.lastInsertRowId;
 
@@ -323,6 +371,7 @@ interface CreditEntryRow {
   type: 'CREDIT' | 'PAYMENT';
   amount: number;
   notes: string | null;
+  payment_method: string | null;
   due_at: number | null;
   recorded_at: number;
 }
@@ -345,7 +394,7 @@ export async function loadCustomers(db: SQLiteDatabase): Promise<Customer[]> {
  */
 export async function loadCreditEntries(db: SQLiteDatabase): Promise<CreditEntry[]> {
   const rows = await db.getAllAsync<CreditEntryRow>(
-    `SELECT id, customer_id, type, amount, notes, due_at, recorded_at
+    `SELECT id, customer_id, type, amount, notes, payment_method, due_at, recorded_at
      FROM credit_entries ORDER BY recorded_at`
   );
   return rows.map(r => ({
@@ -354,6 +403,7 @@ export async function loadCreditEntries(db: SQLiteDatabase): Promise<CreditEntry
     type: r.type,
     amount: r.amount,
     notes: r.notes ?? undefined,
+    payment_method: (r.payment_method as PaymentMethod | null) ?? undefined,
     due_at: r.due_at ?? undefined,
     recorded_at: r.recorded_at,
   }));
@@ -386,10 +436,11 @@ export async function recordCreditEntry(
   amount: number,
   notes: string | null = null,
   dueAt: number | null = null,
-  now: number = Date.now()
+  now: number = Date.now(),
+  paymentMethod: PaymentMethod | null = null
 ): Promise<void> {
   await db.withTransactionAsync(() =>
-    writeCreditEntry(db, customerId, type, amount, notes, dueAt, now)
+    writeCreditEntry(db, customerId, type, amount, notes, dueAt, now, paymentMethod)
   );
 }
 
@@ -400,15 +451,25 @@ async function writeCreditEntry(
   amount: number,
   notes: string | null,
   dueAt: number | null,
-  now: number
+  now: number,
+  paymentMethod: PaymentMethod | null = null
 ): Promise<void> {
   requirePositiveNumber(amount, 'Credit amount');
+  if (paymentMethod != null && !PAYMENT_METHODS.includes(paymentMethod)) {
+    throw new Error(`Unknown payment method: ${paymentMethod}`);
+  }
   await db.runAsync(
-    `INSERT INTO credit_entries (customer_id, type, amount, notes, due_at, recorded_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO credit_entries (customer_id, type, amount, notes, payment_method, due_at, recorded_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
     // A due date only means something on a debt: a payment is not promised, it
-    // has happened.
-    [customerId, type, amount, notes?.trim() || null, type === 'CREDIT' ? dueAt : null, now]
+    // has happened. A payment method runs the other way: only money that
+    // arrived has a way it arrived.
+    [
+      customerId, type, amount, notes?.trim() || null,
+      type === 'PAYMENT' ? paymentMethod : null,
+      type === 'CREDIT' ? dueAt : null,
+      now,
+    ]
   );
   await db.runAsync('UPDATE customers SET updated_at = ? WHERE id = ?', [now, customerId]);
 }
@@ -554,6 +615,10 @@ export interface CashUp {
   taken_out: number;
   /** True for the very first cash-up, which sets a baseline instead of reconciling. */
   is_opening: boolean;
+  /** Takings that arrived digitally (mobile money / card). Undefined = unrecorded. */
+  digital_takings?: number;
+  /** Who ran this cash-up (staff mode). Undefined = nobody in particular. */
+  recorded_by?: number;
   notes?: string;
   recorded_at: number;
 }
@@ -565,6 +630,8 @@ interface CashUpRow {
   difference: number;
   taken_out: number;
   is_opening: number;
+  digital_takings: number | null;
+  recorded_by: number | null;
   notes: string | null;
   recorded_at: number;
 }
@@ -577,6 +644,8 @@ function toCashUp(r: CashUpRow): CashUp {
     difference: r.difference,
     taken_out: r.taken_out,
     is_opening: r.is_opening === 1,
+    digital_takings: r.digital_takings ?? undefined,
+    recorded_by: r.recorded_by ?? undefined,
     notes: r.notes ?? undefined,
     recorded_at: r.recorded_at,
   };
@@ -584,7 +653,8 @@ function toCashUp(r: CashUpRow): CashUp {
 
 export async function loadCashUps(db: SQLiteDatabase, limit = 30): Promise<CashUp[]> {
   const rows = await db.getAllAsync<CashUpRow>(
-    `SELECT id, counted_amount, expected_amount, difference, taken_out, is_opening, notes, recorded_at
+    `SELECT id, counted_amount, expected_amount, difference, taken_out, is_opening,
+            digital_takings, recorded_by, notes, recorded_at
      FROM cash_ups ORDER BY recorded_at DESC LIMIT ?`,
     [limit]
   );
@@ -600,7 +670,8 @@ export async function loadCashUps(db: SQLiteDatabase, limit = 30): Promise<CashU
  */
 export async function getLastCashUp(db: SQLiteDatabase): Promise<CashUp | null> {
   const row = await db.getFirstAsync<CashUpRow>(
-    `SELECT id, counted_amount, expected_amount, difference, taken_out, is_opening, notes, recorded_at
+    `SELECT id, counted_amount, expected_amount, difference, taken_out, is_opening,
+            digital_takings, recorded_by, notes, recorded_at
      FROM cash_ups ORDER BY recorded_at DESC, id DESC LIMIT 1`
   );
   return row ? toCashUp(row) : null;
@@ -616,18 +687,32 @@ export async function getLastCashUp(db: SQLiteDatabase): Promise<CashUp | null> 
 export async function recordCashUp(
   db: SQLiteDatabase,
   result: Pick<CashUpResult, 'counted' | 'expected' | 'difference'>,
-  options: { takenOut?: number; isOpening?: boolean; notes?: string | null } = {},
+  options: {
+    takenOut?: number;
+    isOpening?: boolean;
+    notes?: string | null;
+    /** Takings that arrived digitally (mobile money / card). Recording only. */
+    digitalTakings?: number | null;
+    /** Who ran this cash-up (staff mode). */
+    recordedBy?: number | null;
+  } = {},
   now: number = Date.now()
 ): Promise<number> {
+  if (options.digitalTakings != null && options.digitalTakings < 0) {
+    throw new Error('Digital takings cannot be negative.');
+  }
   const insert = await db.runAsync(
-    `INSERT INTO cash_ups (counted_amount, expected_amount, difference, taken_out, is_opening, notes, recorded_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO cash_ups (counted_amount, expected_amount, difference, taken_out, is_opening,
+                           digital_takings, recorded_by, notes, recorded_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       result.counted,
       result.expected,
       result.difference,
       options.takenOut ?? 0,
       options.isOpening ? 1 : 0,
+      options.digitalTakings ?? null,
+      options.recordedBy ?? null,
       options.notes?.trim() || null,
       now,
     ]
@@ -927,10 +1012,136 @@ export async function undoStockIn(
 }
 
 // ============================================
+// SETTINGS
+// ============================================
+
+/**
+ * Shop-level preferences that must travel inside backups (currency today,
+ * country pack tomorrow). Phone-level preferences (language) stay in
+ * AsyncStorage -- see the note on the settings table in schema.ts.
+ */
+export async function getSetting(db: SQLiteDatabase, key: string): Promise<string | null> {
+  const row = await db.getFirstAsync<{ value: string }>(
+    'SELECT value FROM settings WHERE key = ?',
+    [key]
+  );
+  return row?.value ?? null;
+}
+
+export async function setSetting(
+  db: SQLiteDatabase,
+  key: string,
+  value: string,
+  now: number = Date.now()
+): Promise<void> {
+  await db.runAsync(
+    `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+     ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+    [key, value, now]
+  );
+}
+
+/** Every owner-created event timestamp, used only for the local habit metric. */
+export async function loadActivityTimestamps(db: SQLiteDatabase): Promise<number[]> {
+  const rows = await db.getAllAsync<{ at: number }>(`
+    SELECT recorded_at AS at FROM stock_movements
+    UNION ALL SELECT recorded_at AS at FROM credit_entries
+    UNION ALL SELECT recorded_at AS at FROM expenses
+    UNION ALL SELECT recorded_at AS at FROM cash_ups
+    UNION ALL SELECT recorded_at AS at FROM sales_entries
+    UNION ALL SELECT completed_at AS at FROM count_sessions WHERE completed_at IS NOT NULL
+  `);
+  return rows.map(row => row.at);
+}
+
+// ============================================
+// STAFF MODE
+// ============================================
+
+export interface StaffMember {
+  id: number;
+  name: string;
+  /** Attributes actions; does not secure them. See schema.ts. */
+  pin: string;
+  is_active: boolean;
+  created_at: number;
+}
+
+interface StaffRow {
+  id: number;
+  name: string;
+  pin: string;
+  is_active: number;
+  created_at: number;
+}
+
+export async function loadStaffMembers(db: SQLiteDatabase): Promise<StaffMember[]> {
+  const rows = await db.getAllAsync<StaffRow>(
+    'SELECT id, name, pin, is_active, created_at FROM staff_members WHERE is_active = 1 ORDER BY name'
+  );
+  return rows.map(r => ({
+    id: r.id,
+    name: r.name,
+    pin: r.pin,
+    is_active: r.is_active === 1,
+    created_at: r.created_at,
+  }));
+}
+
+export async function addStaffMember(
+  db: SQLiteDatabase,
+  name: string,
+  pin: string,
+  now: number = Date.now()
+): Promise<number> {
+  if (!name.trim()) throw new Error('Staff name is required.');
+  if (!/^\d{4}$/.test(pin)) throw new Error('PIN must be exactly 4 digits.');
+  const result = await db.runAsync(
+    'INSERT INTO staff_members (name, pin, is_active, created_at, updated_at) VALUES (?, ?, 1, ?, ?)',
+    [name.trim(), pin, now, now]
+  );
+  return result.lastInsertRowId;
+}
+
+/** Hide a staff member. Their recorded_by history survives, like customers. */
+export async function deactivateStaffMember(
+  db: SQLiteDatabase,
+  staffId: number,
+  now: number = Date.now()
+): Promise<void> {
+  await db.runAsync(
+    'UPDATE staff_members SET is_active = 0, updated_at = ? WHERE id = ?',
+    [now, staffId]
+  );
+}
+
+/** The staff member matching a typed PIN, or null. Attribution, not security. */
+export async function findStaffByPin(
+  db: SQLiteDatabase,
+  pin: string
+): Promise<StaffMember | null> {
+  const members = await loadStaffMembers(db);
+  return members.find(m => m.pin === pin) ?? null;
+}
+
+// ============================================
 // COMPLETE, VERSIONED BACKUP AND RESTORE
 // ============================================
 
-export const BACKUP_FORMAT_VERSION = 2;
+/**
+ * Backup versions deliberately advance independently from the SQLite schema:
+ *   1 - the original seven-table backup
+ *   2 - sales book
+ *   3 - settings/currency
+ *   4 - payment methods and digital takings
+ *   5 - staff and recorded_by attribution
+ *   6 - optional product barcodes
+ *
+ * Keeping these steps explicit matters when an old phone is restored straight
+ * onto a current install. Missing nullable fields must become null; values from
+ * a newer in-memory object must never leak into an older declared format.
+ */
+export const BACKUP_FORMAT_VERSION = 6;
 
 export interface ShopTrackBackupData {
   products: any[];
@@ -941,6 +1152,8 @@ export interface ShopTrackBackupData {
   expenses: any[];
   cash_ups: any[];
   sales_entries: any[];
+  settings: any[];
+  staff_members: any[];
 }
 
 export interface ShopTrackBackup {
@@ -952,7 +1165,7 @@ export interface ShopTrackBackup {
 }
 
 export async function createBackup(db: SQLiteDatabase): Promise<ShopTrackBackup> {
-  const [products, stockMovements, countSessions, customers, creditEntries, expenses, cashUps, salesEntries] =
+  const [products, stockMovements, countSessions, customers, creditEntries, expenses, cashUps, salesEntries, settings, staffMembers] =
     await Promise.all([
       db.getAllAsync('SELECT * FROM products ORDER BY id'),
       db.getAllAsync('SELECT * FROM stock_movements ORDER BY id'),
@@ -962,6 +1175,8 @@ export async function createBackup(db: SQLiteDatabase): Promise<ShopTrackBackup>
       db.getAllAsync('SELECT * FROM expenses ORDER BY id'),
       db.getAllAsync('SELECT * FROM cash_ups ORDER BY id'),
       db.getAllAsync('SELECT * FROM sales_entries ORDER BY id'),
+      db.getAllAsync('SELECT * FROM settings ORDER BY key'),
+      db.getAllAsync('SELECT * FROM staff_members ORDER BY id'),
     ]);
 
   return {
@@ -978,6 +1193,8 @@ export async function createBackup(db: SQLiteDatabase): Promise<ShopTrackBackup>
       expenses,
       cash_ups: cashUps,
       sales_entries: salesEntries,
+      settings,
+      staff_members: staffMembers,
     },
   };
 }
@@ -994,21 +1211,24 @@ function rows(value: unknown, name: string): any[] {
 }
 
 /**
- * Validate current backups and upgrade the older formats: format 1 predates
- * the sales book (no sales_entries table), and the pre-pilot three-table
- * format predates versioning entirely.
+ * Validate current backups and upgrade every older format. A backup's declared
+ * format is authoritative: a format-1 object that happens to contain a newer
+ * recorded_by property is still treated as pre-staff data. This also prevents
+ * dangling foreign keys when test tools or hand-edited backups mix shapes.
  */
 export function normaliseBackup(value: unknown): ShopTrackBackup {
   if (!isRecord(value) || value.shoptrack_backup !== true || !isRecord(value.data)) {
     throw new Error('Not a ShopTrack backup.');
   }
 
-  const isCurrent = value.backup_format_version === BACKUP_FORMAT_VERSION;
-  const isV1 = value.backup_format_version === 1;
+  const declaredFormat = value.backup_format_version;
+  const isVersioned = Number.isInteger(declaredFormat) && declaredFormat >= 1 && declaredFormat <= BACKUP_FORMAT_VERSION;
   const isLegacy = value.backup_format_version == null && value.version === 5;
-  if (!isCurrent && !isV1 && !isLegacy) {
+  if (!isVersioned && !isLegacy) {
     throw new Error('This backup format is not supported.');
   }
+
+  const sourceFormat = isLegacy ? 0 : Number(declaredFormat);
 
   const data = value.data;
   return {
@@ -1021,24 +1241,45 @@ export function normaliseBackup(value: unknown): ShopTrackBackup {
         : SCHEMA_VERSION,
     created_at: typeof value.created_at === 'string' ? value.created_at : new Date(0).toISOString(),
     data: {
-      products: rows(data.products, 'products'),
+      products: rows(data.products, 'products').map(product => ({
+        ...product,
+        barcode: sourceFormat >= 6 ? product.barcode ?? null : null,
+      })),
       stock_movements: rows(data.stock_movements, 'stock_movements'),
-      count_sessions: rows(data.count_sessions, 'count_sessions'),
+      count_sessions: rows(data.count_sessions, 'count_sessions').map(session => ({
+        ...session,
+        recorded_by: sourceFormat >= 5 ? session.recorded_by ?? null : null,
+      })),
       customers: isLegacy ? [] : rows(data.customers, 'customers'),
-      credit_entries: isLegacy ? [] : rows(data.credit_entries, 'credit_entries'),
+      credit_entries: isLegacy
+        ? []
+        : rows(data.credit_entries, 'credit_entries').map(entry => ({
+            ...entry,
+            payment_method: sourceFormat >= 4 ? entry.payment_method ?? null : null,
+          })),
       expenses: isLegacy ? [] : rows(data.expenses, 'expenses'),
-      cash_ups: isLegacy ? [] : rows(data.cash_ups, 'cash_ups'),
-      sales_entries: isCurrent ? rows(data.sales_entries, 'sales_entries') : [],
+      cash_ups: isLegacy
+        ? []
+        : rows(data.cash_ups, 'cash_ups').map(cashUp => ({
+            ...cashUp,
+            digital_takings: sourceFormat >= 4 ? cashUp.digital_takings ?? null : null,
+            recorded_by: sourceFormat >= 5 ? cashUp.recorded_by ?? null : null,
+          })),
+      sales_entries: sourceFormat >= 2 ? rows(data.sales_entries, 'sales_entries') : [],
+      settings: sourceFormat >= 3 ? rows(data.settings, 'settings') : [],
+      staff_members: sourceFormat >= 5 ? rows(data.staff_members, 'staff_members') : [],
     },
   };
 }
 
-/** Replace all eight data sets in a single transaction. */
+/** Replace every data set in a single transaction. */
 export async function restoreBackup(db: SQLiteDatabase, value: unknown): Promise<void> {
   const backup = normaliseBackup(value);
   const data = backup.data;
 
   await db.withTransactionAsync(async () => {
+    // Children before the tables they reference: count_sessions and cash_ups
+    // point at staff_members, so staff go last.
     await db.execAsync(`
       DELETE FROM credit_entries;
       DELETE FROM cash_ups;
@@ -1048,16 +1289,30 @@ export async function restoreBackup(db: SQLiteDatabase, value: unknown): Promise
       DELETE FROM count_sessions;
       DELETE FROM customers;
       DELETE FROM products;
+      DELETE FROM settings;
+      DELETE FROM staff_members;
     `);
+
+    // Staff first: restored count_sessions and cash_ups reference them.
+    for (const member of data.staff_members) {
+      await db.runAsync(
+        `INSERT INTO staff_members (id, name, pin, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          member.id, member.name, member.pin, member.is_active ?? 1,
+          member.created_at ?? 0, member.updated_at ?? 0,
+        ]
+      );
+    }
 
     for (const product of data.products) {
       await db.runAsync(
         `INSERT INTO products
-           (id, name, unit_label, buy_price, sell_price, current_qty,
+           (id, name, barcode, unit_label, buy_price, sell_price, current_qty,
             low_stock_threshold, is_active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          product.id, product.name, product.unit_label ?? 'units', product.buy_price ?? null,
+          product.id, product.name, product.barcode ?? null, product.unit_label ?? 'units', product.buy_price ?? null,
           product.sell_price ?? null, product.current_qty ?? 0, product.low_stock_threshold ?? 5,
           product.is_active ?? 1, product.created_at ?? 0, product.updated_at ?? 0,
         ]
@@ -1066,11 +1321,12 @@ export async function restoreBackup(db: SQLiteDatabase, value: unknown): Promise
     for (const session of data.count_sessions) {
       await db.runAsync(
         `INSERT INTO count_sessions
-           (id, started_at, completed_at, products_counted, total_products, notes)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+           (id, started_at, completed_at, products_counted, total_products, recorded_by, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
           session.id, session.started_at, session.completed_at ?? null,
-          session.products_counted ?? 0, session.total_products ?? 0, session.notes ?? null,
+          session.products_counted ?? 0, session.total_products ?? 0,
+          session.recorded_by ?? null, session.notes ?? null,
         ]
       );
     }
@@ -1101,11 +1357,11 @@ export async function restoreBackup(db: SQLiteDatabase, value: unknown): Promise
     for (const entry of data.credit_entries) {
       await db.runAsync(
         `INSERT INTO credit_entries
-           (id, customer_id, type, amount, notes, due_at, recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+           (id, customer_id, type, amount, notes, payment_method, due_at, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           entry.id, entry.customer_id, entry.type, entry.amount, entry.notes ?? null,
-          entry.due_at ?? null, entry.recorded_at,
+          entry.payment_method ?? null, entry.due_at ?? null, entry.recorded_at,
         ]
       );
     }
@@ -1129,12 +1385,21 @@ export async function restoreBackup(db: SQLiteDatabase, value: unknown): Promise
     for (const cashUp of data.cash_ups) {
       await db.runAsync(
         `INSERT INTO cash_ups
-           (id, counted_amount, expected_amount, difference, taken_out, is_opening, notes, recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, counted_amount, expected_amount, difference, taken_out, is_opening,
+            digital_takings, recorded_by, notes, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           cashUp.id, cashUp.counted_amount, cashUp.expected_amount, cashUp.difference,
-          cashUp.taken_out ?? 0, cashUp.is_opening ?? 0, cashUp.notes ?? null, cashUp.recorded_at,
+          cashUp.taken_out ?? 0, cashUp.is_opening ?? 0,
+          cashUp.digital_takings ?? null, cashUp.recorded_by ?? null,
+          cashUp.notes ?? null, cashUp.recorded_at,
         ]
+      );
+    }
+    for (const setting of data.settings) {
+      await db.runAsync(
+        'INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)',
+        [setting.key, setting.value, setting.updated_at ?? 0]
       );
     }
   });

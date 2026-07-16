@@ -35,6 +35,14 @@ export interface Customer {
   phone?: string;
 }
 
+/**
+ * How a payment arrived. Recording only -- ShopTrack never moves money.
+ * Undefined means unrecorded, which every payment before schema v8 is.
+ */
+export type PaymentMethod = 'CASH' | 'MOBILE_MONEY' | 'BANK' | 'OTHER';
+
+export const PAYMENT_METHODS: PaymentMethod[] = ['CASH', 'MOBILE_MONEY', 'BANK', 'OTHER'];
+
 export interface CreditEntry {
   id: number;
   customer_id: number;
@@ -43,6 +51,8 @@ export interface CreditEntry {
   /** Always positive; `type` carries the direction. */
   amount: number;
   notes?: string;
+  /** How a PAYMENT arrived. Undefined = unrecorded. Meaningless on CREDIT rows. */
+  payment_method?: PaymentMethod;
   /**
    * When the customer said they would pay, on a CREDIT entry.
    * Undefined means they did not say -- common, and fine.
@@ -75,8 +85,22 @@ export interface CustomerBalance {
   /** Days past the promise; null unless overdue. */
   days_overdue: number | null;
 
-  /** Plain-language summary, e.g. "Thandi owes R90". */
-  statement: string;
+  /** Structured summary rendered by the selected language/currency. */
+  statement: CreditStatement;
+}
+
+export type CreditStatement =
+  | { kind: 'paid_up'; customer_name: string }
+  | { kind: 'change_owed'; customer_name: string; amount: number }
+  | { kind: 'owes'; customer_name: string; amount: number }
+  | { kind: 'overdue_today'; customer_name: string; amount: number }
+  | { kind: 'overdue'; customer_name: string; amount: number; days: number }
+  | { kind: 'stale'; customer_name: string; amount: number; days: number };
+
+export interface OutstandingStatement {
+  kind: 'outstanding';
+  amount: number;
+  people: number;
 }
 
 export interface CreditSummary {
@@ -87,6 +111,8 @@ export interface CreditSummary {
 
   credit_given: number;        // Credit handed out in the period
   payments_received: number;   // Cash collected in the period
+  cash_payments_received: number;
+  digital_payments_received: number;
 
   /**
    * Only those with a non-zero balance, biggest debt first. Answers "who owes
@@ -212,29 +238,27 @@ function describeBalance(
   daysSinceActivity: number | null,
   isOverdue: boolean,
   daysOverdue: number | null
-): string {
+): CreditStatement {
   if (balance === 0) {
-    return `${name} is all paid up.`;
+    return { kind: 'paid_up', customer_name: name };
   }
 
   if (balance < 0) {
-    return `You owe ${name} R${Math.abs(balance).toFixed(2)} in change.`;
+    return { kind: 'change_owed', customer_name: name, amount: Math.abs(balance) };
   }
-
-  const owes = `${name} owes R${balance.toFixed(2)}`;
 
   // A broken promise is more specific than silence, so it is worth saying first.
   if (isOverdue && daysOverdue != null) {
     return daysOverdue === 0
-      ? `${owes}, and said they would pay today.`
-      : `${owes}, and was meant to pay ${daysOverdue} ${daysOverdue === 1 ? 'day' : 'days'} ago.`;
+      ? { kind: 'overdue_today', customer_name: name, amount: balance }
+      : { kind: 'overdue', customer_name: name, amount: balance, days: daysOverdue };
   }
 
   if (daysSinceActivity != null && daysSinceActivity >= STALE_AFTER_DAYS) {
-    return `${owes}, and has not paid anything for ${daysSinceActivity} days.`;
+    return { kind: 'stale', customer_name: name, amount: balance, days: daysSinceActivity };
   }
 
-  return `${owes}.`;
+  return { kind: 'owes', customer_name: name, amount: balance };
 }
 
 // ============================================
@@ -271,6 +295,14 @@ export function calculateCreditSummary(
     .filter(b => b.is_overdue)
     .sort((a, b) => (b.days_overdue ?? 0) - (a.days_overdue ?? 0));
 
+  const periodPayments = inPeriod.filter(e => e.type === 'PAYMENT');
+  const digitalPayments = periodPayments.filter(
+    e => e.payment_method === 'MOBILE_MONEY' || e.payment_method === 'BANK'
+  );
+  const cashPayments = periodPayments.filter(
+    e => e.payment_method !== 'MOBILE_MONEY' && e.payment_method !== 'BANK'
+  );
+
   return {
     total_outstanding: round2(
       owing.reduce((sum, b) => sum + Math.max(0, b.balance), 0)
@@ -280,6 +312,8 @@ export function calculateCreditSummary(
     customers_overdue: overdue_debts.length,
     credit_given: round2(sumOf(inPeriod, 'CREDIT')),
     payments_received: round2(sumOf(inPeriod, 'PAYMENT')),
+    cash_payments_received: round2(cashPayments.reduce((sum, e) => sum + e.amount, 0)),
+    digital_payments_received: round2(digitalPayments.reduce((sum, e) => sum + e.amount, 0)),
     owing,
     everyone,
     stale_debts,
@@ -291,13 +325,13 @@ export function calculateCreditSummary(
  * One line for Home, sized to what is actually happening.
  * Returns null when there is nothing worth saying.
  */
-export function summariseOutstanding(summary: CreditSummary): string | null {
+export function summariseOutstanding(summary: CreditSummary): OutstandingStatement | null {
   if (summary.total_outstanding <= 0) return null;
-
-  const amount = `R${summary.total_outstanding.toFixed(2)}`;
-  const people = summary.customers_owing === 1 ? '1 person' : `${summary.customers_owing} people`;
-
-  return `${amount} is owed to you by ${people}.`;
+  return {
+    kind: 'outstanding',
+    amount: summary.total_outstanding,
+    people: summary.customers_owing,
+  };
 }
 
 // ============================================

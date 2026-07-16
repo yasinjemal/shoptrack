@@ -10,7 +10,6 @@ import {
   calculateExpenseSummary,
   calculateNetProfit,
   EXPENSE_CATEGORIES,
-  CATEGORY_LABELS,
   CATEGORY_ICONS,
   type Expense,
 } from './expenses';
@@ -110,10 +109,13 @@ equal(net.expenses, 800, 'expenses are carried through');
 equal(net.net_profit, 1600, 'net is gross minus expenses');
 equal(net.is_loss, false, 'a positive net is not a loss');
 equal(net.has_expense_data, true, 'expenses were recorded');
-equal(
-  net.statement,
-  'You made R2400.00 from sales, paid R800.00 in costs, and kept R1600.00.',
-  'statement shows all three numbers, not just the good one'
+equal(net.statement.kind, 'profit', 'statement identifies a profit');
+check(
+  net.statement.kind === 'profit' &&
+    net.statement.gross_profit === 2400 &&
+    net.statement.expenses === 800 &&
+    net.statement.net_profit === 1600,
+  'statement exposes all three numbers as data'
 );
 
 // ============================================
@@ -125,15 +127,13 @@ console.log('========================================');
 const loss = calculateNetProfit(500, 1500);
 equal(loss.net_profit, -1000, 'net goes negative when costs exceed margin');
 equal(loss.is_loss, true, 'flagged as a loss');
-check(
-  loss.statement.includes('R1000.00 more than you made'),
-  'a loss is explained in plain words, not a minus sign'
-);
+equal(loss.statement.kind, 'loss', 'a loss gets a distinct renderable kind');
+equal(loss.statement.kind === 'loss' ? loss.statement.loss : null, 1000, 'loss amount is positive data');
 
 const breakEven = calculateNetProfit(900, 900);
 equal(breakEven.net_profit, 0, 'break-even is exactly zero');
 equal(breakEven.is_loss, false, 'break-even is not a loss');
-check(breakEven.statement.includes('broke even'), 'break-even says so');
+equal(breakEven.statement.kind, 'break_even', 'break-even says so');
 
 // ============================================
 console.log('');
@@ -144,10 +144,7 @@ console.log('========================================');
 const noData = calculateNetProfit(2400, 0);
 equal(noData.net_profit, 2400, 'net equals gross when nothing was recorded');
 equal(noData.has_expense_data, false, 'flags that there is no expense data');
-check(
-  noData.statement.includes('No expenses recorded yet'),
-  'says nothing was recorded rather than implying it was all kept'
-);
+equal(noData.statement.kind, 'no_expenses', 'says nothing was recorded rather than implying it was all kept');
 
 // ============================================
 console.log('');
@@ -195,10 +192,6 @@ check(
   'there is no STOCK category to double-count deliveries with'
 );
 
-check(
-  EXPENSE_CATEGORIES.every(c => CATEGORY_LABELS[c] != null && CATEGORY_LABELS[c] !== ''),
-  'every category has a human label'
-);
 check(
   EXPENSE_CATEGORIES.every(c => CATEGORY_ICONS[c] != null && CATEGORY_ICONS[c] !== ''),
   'every category has an icon'

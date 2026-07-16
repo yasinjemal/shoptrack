@@ -29,6 +29,7 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import type { SQLiteDatabase } from 'expo-sqlite';
+import { formatMoney, getCurrentCurrency } from '../../core/currency';
 
 import {
   calculateSalesHistory,
@@ -62,7 +63,7 @@ export interface SalesStrings {
   SALES_DAYS_FILLED: (filled: number, total: number) => string;
   SALES_FILL_HINT: string;
   SALES_MARGIN: string;
-  SALES_MARGIN_HINT: string;
+  SALES_MARGIN_HINT: (hundred: string, low: string, high: string) => string;
   SALES_MARGIN_IS_YOURS: string;
   SALES_WILL_KEEP: (amount: string) => string;
   SALES_PICK_MONTH: string;
@@ -188,7 +189,7 @@ export function SalesScreen({
               {/* The answer to "what have I made?", all the way back. */}
               <View style={ss.totalCard}>
                 <Text style={ss.totalLabel}>{strings.SALES_TOTAL_LABEL}</Text>
-                <Text style={ss.totalAmount}>R{history.total_profit.toFixed(2)}</Text>
+                <Text style={ss.totalAmount}>{formatMoney(history.total_profit)}</Text>
                 <Text style={ss.totalHint}>
                   {strings.SALES_TOTAL_HINT(
                     history.months_recorded,
@@ -258,14 +259,14 @@ function MonthRow({ month, strings }: { month: MonthlySales; strings: SalesStrin
       <View style={ss.monthBody}>
         <Text style={ss.monthName}>{formatMonth(month.month_key)}</Text>
         <Text style={ss.monthMeta}>
-          R{month.sales.toFixed(2)} ·{' '}
+          {formatMoney(month.sales)} ·{' '}
           {month.source === 'days'
             ? strings.SALES_MONTH_DAYS(month.days_recorded)
             : strings.SALES_MONTH_TOTAL}
           {' · '}{month.margin_pct.toFixed(0)}%
         </Text>
       </View>
-      <Text style={ss.monthProfit}>R{month.profit.toFixed(2)}</Text>
+      <Text style={ss.monthProfit}>{formatMoney(month.profit)}</Text>
     </View>
   );
 }
@@ -336,7 +337,7 @@ function EntryScreen({
       <ScrollView style={ss.form} keyboardShouldPersistTaps="handled">
         <Text style={styles.inputLabel}>{strings.SALES_TOOK_TODAY}</Text>
         <View style={styles.priceInputRow}>
-          <Text style={styles.currencyPrefix}>R</Text>
+          <Text style={styles.currencyPrefix}>{getCurrentCurrency().symbol}</Text>
           <TextInput
             style={styles.priceInput}
             value={amount}
@@ -358,11 +359,13 @@ function EntryScreen({
           />
           <Text style={styles.currencyPrefix}>%</Text>
         </View>
-        <Text style={styles.inputHint}>{strings.SALES_MARGIN_HINT}</Text>
+        <Text style={styles.inputHint}>
+          {strings.SALES_MARGIN_HINT(formatMoney(100, 0), formatMoney(20, 0), formatMoney(30, 0))}
+        </Text>
 
         {takings > 0 && marginValid && (
           <Text style={styles.costSummary}>
-            {strings.SALES_WILL_KEEP(`R${keeps.toFixed(2)}`)}
+            {strings.SALES_WILL_KEEP(formatMoney(keeps))}
           </Text>
         )}
 

@@ -78,7 +78,24 @@ export interface MonthlySales {
    */
   has_conflict: boolean;
 
-  statement: string;
+  statement: SalesMonthStatement;
+}
+
+export type SalesMonthStatement =
+  | { kind: 'empty'; month_key: string }
+  | {
+      kind: 'summary';
+      month_key: string;
+      sales: number;
+      profit: number;
+      source: Exclude<MonthSource, 'none'>;
+      days_recorded: number;
+    };
+
+export interface SalesBookStatement {
+  kind: 'sales_book';
+  profit: number;
+  months: number;
 }
 
 export interface SalesHistory {
@@ -234,7 +251,7 @@ export function calculateMonth(month_key: string, entries: SalesEntry[]): Monthl
       source: 'none',
       days_recorded: 0,
       has_conflict: false,
-      statement: `Nothing recorded for ${formatMonth(month_key)}.`,
+      statement: { kind: 'empty', month_key },
     };
   }
 
@@ -254,22 +271,15 @@ export function calculateMonth(month_key: string, entries: SalesEntry[]): Monthl
     source,
     days_recorded: days.length,
     has_conflict,
-    statement: describeMonth(month_key, sales, profit, source, days.length),
+    statement: {
+      kind: 'summary',
+      month_key,
+      sales,
+      profit,
+      source,
+      days_recorded: days.length,
+    },
   };
-}
-
-function describeMonth(
-  key: string,
-  sales: number,
-  profit: number,
-  source: MonthSource,
-  days: number
-): string {
-  const name = formatMonth(key);
-  const from = source === 'days'
-    ? `${days} ${days === 1 ? 'day' : 'days'} recorded`
-    : 'one month total';
-  return `${name}: you took R${sales.toFixed(2)} and kept about R${profit.toFixed(2)} (${from}).`;
 }
 
 // ============================================
@@ -305,11 +315,9 @@ export function calculateSalesHistory(entries: SalesEntry[]): SalesHistory {
 /**
  * The one line for Home. Null when there is nothing to say, so no empty card.
  */
-export function summariseSalesBook(history: SalesHistory): string | null {
+export function summariseSalesBook(history: SalesHistory): SalesBookStatement | null {
   if (history.months_recorded === 0) return null;
-
-  const months = history.months_recorded === 1 ? '1 month' : `${history.months_recorded} months`;
-  return `R${history.total_profit.toFixed(2)} profit across ${months}.`;
+  return { kind: 'sales_book', profit: history.total_profit, months: history.months_recorded };
 }
 
 // ============================================

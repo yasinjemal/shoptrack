@@ -63,9 +63,23 @@ export interface ProductMetrics {
   has_anomaly: boolean;
   anomaly_type?: 'LOSS' | 'NEGATIVE_SALES' | 'IMPOSSIBLE_GAIN' | 'NO_DATA';
   
-  // Human-readable explanation
-  truth_statement: string;  // "You likely sold 12 units of Sugar this week"
+  // Structured explanation. Rendering belongs to src/i18n/statements.ts.
+  truth_statement: TruthStatement;
 }
+
+export type TruthStatement =
+  | { kind: 'no_data'; product_name: string }
+  | { kind: 'impossible_gain'; product_name: string }
+  | { kind: 'loss'; product_name: string }
+  | { kind: 'incorrect'; product_name: string }
+  | { kind: 'no_sales'; product_name: string }
+  | {
+      kind: 'sales';
+      product_name: string;
+      estimated_sold: number;
+      estimated_profit: number;
+      confidence: number;
+    };
 
 export interface PeriodSummary {
   period_start: number;
@@ -389,41 +403,34 @@ function generateTruthStatement(
   confidence: number,
   hasAnomaly: boolean,
   anomalyType?: string
-): string {
+): TruthStatement {
   
   // Handle anomalies first
   if (hasAnomaly) {
     switch (anomalyType) {
       case 'NO_DATA':
-        return `Not enough data to estimate ${productName} sales.`;
+        return { kind: 'no_data', product_name: productName };
       case 'IMPOSSIBLE_GAIN':
-        return `${productName} shows more stock than recorded. Check if you missed a delivery.`;
+        return { kind: 'impossible_gain', product_name: productName };
       case 'LOSS':
-        return `${productName} may have loss or damage. Stock is lower than expected.`;
+        return { kind: 'loss', product_name: productName };
       case 'NEGATIVE_SALES':
-        return `${productName} data looks incorrect. Please recount.`;
+        return { kind: 'incorrect', product_name: productName };
     }
   }
   
   // No sales
   if (estimatedSold === 0) {
-    return `No ${productName} sold this period.`;
+    return { kind: 'no_sales', product_name: productName };
   }
   
-  // Build confidence qualifier
-  let qualifier = '';
-  if (confidence < 0.5) {
-    qualifier = 'roughly ';
-  } else if (confidence < 0.8) {
-    qualifier = 'about ';
-  }
-  
-  // Build profit statement
-  const profitStatement = estimatedProfit >= 0
-    ? `making ${qualifier}R${Math.abs(estimatedProfit).toFixed(0)} profit`
-    : `losing R${Math.abs(estimatedProfit).toFixed(0)}`;
-  
-  return `You ${qualifier}sold ${estimatedSold} ${productName}, ${profitStatement}.`;
+  return {
+    kind: 'sales',
+    product_name: productName,
+    estimated_sold: estimatedSold,
+    estimated_profit: estimatedProfit,
+    confidence,
+  };
 }
 
 // ============================================
@@ -563,38 +570,4 @@ export function getPeriodBounds(
       return { start, end };
     }
   }
-}
-
-// ============================================
-// FORMATTING HELPERS
-// ============================================
-
-/**
- * Format currency for display (South African Rand).
- * Simple, no external dependencies.
- */
-export function formatCurrency(amount: number, currency: string = 'R'): string {
-  const rounded = Math.round(amount * 100) / 100;
-  const formatted = rounded.toLocaleString('en-ZA', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  });
-  return `${currency}${formatted}`;
-}
-
-/**
- * Format percentage for display.
- */
-export function formatPercent(value: number): string {
-  return `${Math.round(value)}%`;
-}
-
-/**
- * Get human-readable confidence label.
- */
-export function getConfidenceLabel(confidence: number): string {
-  if (confidence >= 0.8) return 'Good data';
-  if (confidence >= 0.5) return 'Some missing data';
-  if (confidence >= 0.3) return 'Limited data';
-  return 'Not enough data';
 }

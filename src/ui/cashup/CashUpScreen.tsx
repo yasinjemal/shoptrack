@@ -26,6 +26,7 @@ import {
   Alert,
   TextInput,
   ScrollView,
+  Share,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import type { SQLiteDatabase } from 'expo-sqlite';
@@ -53,10 +54,17 @@ import {
   type CashUp,
 } from '../../core/db';
 import { calculatePeriodSummary } from '../../core/calculations';
+import { formatMoney, getCurrentCurrency } from '../../core/currency';
 import { calculateCreditSummary } from '../../core/credit';
 import { calculateExpenseSummary } from '../../core/expenses';
 import { styles } from '../styles';
 import { cashUpStyles as cu } from './styles';
+import { buildCashUpSummary } from '../../core/messages';
+import { renderShareMessage } from '../../i18n/messages';
+import type { Strings } from '../../i18n';
+import { renderCashUpStatement } from '../../i18n/statements';
+import { SpeakButton } from '../components/SpeakButton';
+import { StaffAttribution } from '../components/StaffAttribution';
 
 export interface CashUpStrings {
   ERROR_TITLE: string;
@@ -72,6 +80,7 @@ export interface CashUpStrings {
   CASHUP_TRAIL_TITLE: string;
   CASHUP_LINE_OPENING: string;
   CASHUP_LINE_REVENUE: string;
+  CASHUP_LINE_DIGITAL: string;
   CASHUP_LINE_CREDIT: string;
   CASHUP_LINE_PAYMENTS: string;
   CASHUP_LINE_EXPENSES: string;
@@ -88,12 +97,18 @@ export interface CashUpStrings {
   CASHUP_HISTORY: string;
   CASHUP_CANCEL: string;
   CASHUP_FLOAT: string;
+  CASHUP_DIGITAL_QUESTION: string;
+  CASHUP_DIGITAL_HINT: string;
   CASHUP_STATEMENT_BALANCED: string;
   CASHUP_STATEMENT_OVER: (amount: string) => string;
   CASHUP_STATEMENT_SHORT_LARGE: (amount: string) => string;
   CASHUP_STATEMENT_SHORT_SMALL: (amount: string) => string;
   FORMAT_WHEN: (ts: number) => string;
   ERROR_GENERIC: string;
+  SHARE: string;
+  READ_ALOUD: string;
+  STOP_READING: string;
+  SPEECH_LOCALE: string;
 }
 
 type Step =
@@ -105,6 +120,7 @@ type Step =
 const LINE_KEYS = {
   opening: 'CASHUP_LINE_OPENING',
   revenue: 'CASHUP_LINE_REVENUE',
+  digital_takings: 'CASHUP_LINE_DIGITAL',
   credit_given: 'CASHUP_LINE_CREDIT',
   payments: 'CASHUP_LINE_PAYMENTS',
   expenses: 'CASHUP_LINE_EXPENSES',
@@ -118,7 +134,7 @@ export function CashUpScreen({
   onChanged,
 }: {
   db: SQLiteDatabase;
-  strings: CashUpStrings;
+  strings: Strings;
   onBack: () => void;
   onChanged: () => void;
 }) {
@@ -126,7 +142,10 @@ export function CashUpScreen({
   const [history, setHistory] = useState<CashUp[]>([]);
   const [amount, setAmount] = useState('');
   const [takeOut, setTakeOut] = useState('');
+  const [digitalAmount, setDigitalAmount] = useState('');
   const [saving, setSaving] = useState(false);
+  const [recordedBy, setRecordedBy] = useState<number | null>(null);
+  const [staffRequired, setStaffRequired] = useState(false);
 
   const load = React.useCallback(async () => {
     try {
@@ -169,8 +188,9 @@ export function CashUpScreen({
         inputs: {
           opening,
           revenue: sales.total_estimated_revenue,
+          digitalTakings: 0,
           creditGiven: book.credit_given,
-          paymentsReceived: book.payments_received,
+          paymentsReceived: book.cash_payments_received,
           expenses: costs.total,
           stockPurchases: purchases,
         },
@@ -186,23 +206,29 @@ export function CashUpScreen({
   }, [load]);
 
   const counted = parseFloat(amount) || 0;
-  const canSubmit = amount.trim() !== '' && counted >= 0 && !saving;
+  const digitalTakings = parseFloat(digitalAmount) || 0;
+  const canSubmit = amount.trim() !== '' && counted >= 0 && digitalTakings >= 0 && !saving;
 
   const handleCheck = () => {
     if (step.kind !== 'counting' || !canSubmit) return;
-    const trail = calculateExpectedCash(step.inputs);
-    const result = reconcile(trail.expected, counted, cashTurnover(step.inputs));
-    setStep({ kind: 'result', inputs: step.inputs, trail, result });
+    const inputs = { ...step.inputs, digitalTakings };
+    const trail = calculateExpectedCash(inputs);
+    const result = reconcile(trail.expected, counted, cashTurnover(inputs));
+    setStep({ kind: 'result', inputs, trail, result });
   };
 
   const handleSaveFirst = async () => {
     if (!canSubmit) return;
+    if (staffRequired && recordedBy == null) {
+      Alert.alert(strings.STAFF_REQUIRED);
+      return;
+    }
     setSaving(true);
     try {
       await recordCashUp(
         db,
         { counted, expected: 0, difference: 0 },
-        { isOpening: true }
+        { isOpening: true, recordedBy }
       );
       onChanged();
       onBack();
@@ -215,9 +241,17 @@ export function CashUpScreen({
 
   const handleSaveResult = async () => {
     if (step.kind !== 'result') return;
+    if (staffRequired && recordedBy == null) {
+      Alert.alert(strings.STAFF_REQUIRED);
+      return;
+    }
     setSaving(true);
     try {
-      await recordCashUp(db, step.result, { takenOut: parseFloat(takeOut) || 0 });
+      await recordCashUp(db, step.result, {
+        takenOut: parseFloat(takeOut) || 0,
+        digitalTakings: step.inputs.digitalTakings,
+        recordedBy,
+      });
       onChanged();
       onBack();
     } catch (error) {
@@ -233,13 +267,18 @@ export function CashUpScreen({
       <SafeAreaView style={styles.container}>
         <StatusBar style="dark" />
         <Header title={strings.CASHUP_FIRST_TITLE} onBack={onBack} strings={strings} />
-
+        <StaffAttribution
+          db={db}
+          strings={strings}
+          onSelected={setRecordedBy}
+          onRequirementChange={setStaffRequired}
+        />
         <ScrollView style={cu.form}>
           <Text style={cu.question}>{strings.CASHUP_QUESTION}</Text>
           <Text style={cu.hint}>{strings.CASHUP_FIRST_HINT}</Text>
 
           <View style={styles.priceInputRow}>
-            <Text style={styles.currencyPrefix}>R</Text>
+            <Text style={styles.currencyPrefix}>{getCurrentCurrency().symbol}</Text>
             <TextInput
               style={styles.priceInput}
               value={amount}
@@ -270,6 +309,12 @@ export function CashUpScreen({
       <SafeAreaView style={styles.container}>
         <StatusBar style="dark" />
         <Header title={strings.CASHUP_TITLE} onBack={onBack} strings={strings} />
+        <StaffAttribution
+          db={db}
+          strings={strings}
+          onSelected={setRecordedBy}
+          onRequirementChange={setStaffRequired}
+        />
 
         <ScrollView style={cu.form}>
           <Text style={cu.question}>{strings.CASHUP_QUESTION}</Text>
@@ -281,7 +326,7 @@ export function CashUpScreen({
           )}
 
           <View style={styles.priceInputRow}>
-            <Text style={styles.currencyPrefix}>R</Text>
+            <Text style={styles.currencyPrefix}>{getCurrentCurrency().symbol}</Text>
             <TextInput
               style={styles.priceInput}
               value={amount}
@@ -291,6 +336,19 @@ export function CashUpScreen({
               autoFocus
             />
           </View>
+
+          <Text style={styles.inputLabel}>{strings.CASHUP_DIGITAL_QUESTION}</Text>
+          <View style={styles.priceInputRow}>
+            <Text style={styles.currencyPrefix}>{getCurrentCurrency().symbol}</Text>
+            <TextInput
+              style={styles.priceInput}
+              value={digitalAmount}
+              onChangeText={setDigitalAmount}
+              placeholder="0.00"
+              keyboardType="decimal-pad"
+            />
+          </View>
+          <Text style={styles.inputHint}>{strings.CASHUP_DIGITAL_HINT}</Text>
 
           <TouchableOpacity
             style={[styles.saveButton, !canSubmit && styles.saveButtonDisabled]}
@@ -332,9 +390,13 @@ export function CashUpScreen({
                   : strings.CASHUP_SHORT}
             </Text>
             {result.verdict !== 'balanced' && (
-              <Text style={cu.verdictAmount}>R{Math.abs(result.difference).toFixed(2)}</Text>
+              <Text style={cu.verdictAmount}>{formatMoney(Math.abs(result.difference))}</Text>
             )}
             <Text style={cu.verdictStatement}>{describeResult(result, strings)}</Text>
+            <SpeakButton
+              text={renderCashUpStatement(result.statement, strings as Strings)}
+              strings={strings}
+            />
           </View>
 
           {/* The sum is the argument: an owner told they are short deserves to
@@ -352,7 +414,7 @@ export function CashUpScreen({
                   ]}
                 >
                   {line.direction === 'out' ? '−' : line.direction === 'in' ? '+' : ''}
-                  R{line.amount.toFixed(2)}
+                  {formatMoney(line.amount)}
                 </Text>
               </View>
             ))}
@@ -361,17 +423,17 @@ export function CashUpScreen({
 
             <View style={cu.trailRow}>
               <Text style={cu.trailTotalLabel}>{strings.CASHUP_EXPECTED}</Text>
-              <Text style={cu.trailTotalValue}>R{result.expected.toFixed(2)}</Text>
+              <Text style={cu.trailTotalValue}>{formatMoney(result.expected)}</Text>
             </View>
             <View style={cu.trailRow}>
               <Text style={cu.trailTotalLabel}>{strings.CASHUP_COUNTED}</Text>
-              <Text style={cu.trailTotalValue}>R{result.counted.toFixed(2)}</Text>
+              <Text style={cu.trailTotalValue}>{formatMoney(result.counted)}</Text>
             </View>
           </View>
 
           <Text style={styles.inputLabel}>{strings.CASHUP_TAKE_OUT}</Text>
           <View style={styles.priceInputRow}>
-            <Text style={styles.currencyPrefix}>R</Text>
+            <Text style={styles.currencyPrefix}>{getCurrentCurrency().symbol}</Text>
             <TextInput
               style={styles.priceInput}
               value={takeOut}
@@ -381,6 +443,18 @@ export function CashUpScreen({
             />
           </View>
           <Text style={styles.inputHint}>{strings.CASHUP_TAKE_OUT_HINT}</Text>
+
+          <TouchableOpacity
+            style={styles.dataButton}
+            onPress={() => Share.share({
+              message: renderShareMessage(
+                buildCashUpSummary(result, step.inputs.digitalTakings),
+                strings as Strings
+              ),
+            })}
+          >
+            <Text style={styles.dataButtonText}>{strings.SHARE}</Text>
+          </TouchableOpacity>
 
           <TouchableOpacity
             style={[styles.saveButton, saving && styles.saveButtonDisabled]}
@@ -428,7 +502,7 @@ function Header({
 
 function describeResult(result: CashUpResult, strings: CashUpStrings): string {
   if (result.verdict === 'balanced') return strings.CASHUP_STATEMENT_BALANCED;
-  const amount = `R${Math.abs(result.difference).toFixed(2)}`;
+  const amount = formatMoney(Math.abs(result.difference));
   if (result.verdict === 'over') return strings.CASHUP_STATEMENT_OVER(amount);
   return result.severity === 'large'
     ? strings.CASHUP_STATEMENT_SHORT_LARGE(amount)
@@ -442,7 +516,7 @@ function History({ history, strings }: { history: CashUp[]; strings: CashUpStrin
       {history.map(h => (
         <View key={h.id} style={cu.historyRow}>
           <Text style={cu.historyDate}>{strings.FORMAT_WHEN(h.recorded_at)}</Text>
-          <Text style={cu.historyCounted}>R{h.counted_amount.toFixed(2)}</Text>
+          <Text style={cu.historyCounted}>{formatMoney(h.counted_amount)}</Text>
           {h.is_opening ? (
             <Text style={cu.historyOpening}>{strings.CASHUP_FLOAT}</Text>
           ) : (
@@ -455,7 +529,7 @@ function History({ history, strings }: { history: CashUp[]; strings: CashUpStrin
             >
               {h.difference === 0
                 ? '✓'
-                : `${h.difference > 0 ? '+' : '−'}R${Math.abs(h.difference).toFixed(2)}`}
+                : `${h.difference > 0 ? '+' : '−'}${formatMoney(Math.abs(h.difference))}`}
             </Text>
           )}
         </View>

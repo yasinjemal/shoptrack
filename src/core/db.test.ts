@@ -24,7 +24,13 @@ import {
   addProduct,
   addCustomer,
   addCustomerToBook,
+  addStaffMember,
   createBackup,
+  deactivateStaffMember,
+  findStaffByPin,
+  getSetting,
+  loadStaffMembers,
+  setSetting,
   deactivateCustomer,
   deleteExpense,
   getLastCashUp,
@@ -34,6 +40,7 @@ import {
   loadCustomers,
   loadExpenses,
   loadMovements,
+  loadRecentProductCounts,
   loadProducts,
   normaliseBackup,
   openingBalanceFrom,
@@ -152,6 +159,9 @@ async function run() {
 
   const movements = await loadMovements(db);
   equal(movements.length, 3, 'all three movements are stored');
+  const recentCounts = await loadRecentProductCounts(db, 2);
+  equal(recentCounts.get(bread.id)?.length, 2, 'recent-count paging returns two rows per product');
+  equal(recentCounts.get(bread.id)?.[0].quantity, 10, 'recent-count paging returns newest first');
 
   const stockIn = movements.find(m => m.type === 'STOCK_IN');
   equal(stockIn?.buy_price_at_time, 14, 'stock-in snapshots the unit cost it paid');
@@ -372,6 +382,7 @@ async function run() {
   const inputs = {
     opening: openingBalanceFrom(opening)!,
     revenue: summary.total_estimated_revenue,
+    digitalTakings: 0,
     creditGiven: book.credit_given,
     paymentsReceived: book.payments_received,
     expenses: expenseSummary.total,
@@ -515,13 +526,51 @@ async function run() {
 
   console.log('');
   console.log('========================================');
+  console.log('TEST: settings, staff and payment methods through real SQL');
+  console.log('========================================');
+
+  const { db: opsDb } = await freshDb();
+  equal(await getSetting(opsDb, 'currency_code'), null, 'a fresh shop has no currency setting');
+  await setSetting(opsDb, 'currency_code', 'ZAR', MONDAY);
+  await setSetting(opsDb, 'currency_code', 'NGN', MONDAY + 1);
+  equal(await getSetting(opsDb, 'currency_code'), 'NGN', 'a setting is upserted, not duplicated');
+
+  const staffId = await addStaffMember(opsDb, 'Thabo', '1234', MONDAY);
+  equal((await loadStaffMembers(opsDb))[0].name, 'Thabo', 'staff can be added');
+  equal((await findStaffByPin(opsDb, '1234'))!.id, staffId, 'a PIN finds its person');
+  equal(await findStaffByPin(opsDb, '9999'), null, 'a wrong PIN finds nobody');
+  let badPinRejected = false;
+  try { await addStaffMember(opsDb, 'X', '12'); } catch { badPinRejected = true; }
+  check(badPinRejected, 'a PIN must be 4 digits');
+  await deactivateStaffMember(opsDb, staffId, MONDAY + 1);
+  equal((await loadStaffMembers(opsDb)).length, 0, 'a deactivated staff member drops off the list');
+
+  const payCustomer = await addCustomer(opsDb, 'Naledi', null, MONDAY);
+  await recordCreditEntry(opsDb, payCustomer, 'CREDIT', 50, null, null, MONDAY, 'CASH');
+  await recordCreditEntry(opsDb, payCustomer, 'PAYMENT', 20, null, null, MONDAY + 1, 'MOBILE_MONEY');
+  const payEntries = await loadCreditEntries(opsDb);
+  equal(payEntries[0].payment_method, undefined, 'a method on a CREDIT row is dropped: only money that arrived has a way it arrived');
+  equal(payEntries[1].payment_method, 'MOBILE_MONEY', 'a payment records how it arrived');
+  let badMethodRejected = false;
+  try {
+    await recordCreditEntry(opsDb, payCustomer, 'PAYMENT', 5, null, null, MONDAY + 2, 'BITCOIN' as never);
+  } catch { badMethodRejected = true; }
+  check(badMethodRejected, 'an unknown payment method is refused');
+  let negativeDigitalRejected = false;
+  try {
+    await recordCashUp(opsDb, { counted: 10, expected: 10, difference: 0 }, { digitalTakings: -5 }, MONDAY);
+  } catch { negativeDigitalRejected = true; }
+  check(negativeDigitalRejected, 'negative digital takings are refused');
+
+  console.log('');
+  console.log('========================================');
   console.log('TEST: backup and restore covers the whole shop');
   console.log('========================================');
 
   const { db: backupSource } = await freshDb();
   const backupProductId = await addProduct(
     backupSource,
-    { name: 'Bread', buyPrice: 14, sellPrice: 18, quantity: 20 },
+    { name: 'Bread', barcode: '600100000001', buyPrice: 14, sellPrice: 18, quantity: 20 },
     MONDAY
   );
   const backupProduct = (await loadProducts(backupSource)).find(p => p.id === backupProductId)!;
@@ -539,17 +588,24 @@ async function run() {
     MONDAY + DAY
   );
   await recordExpense(backupSource, 'TRANSPORT', 40, 'Taxi', MONDAY + DAY);
+  const backupStaffId = await addStaffMember(backupSource, 'Sipho', '4321', MONDAY);
   await recordCashUp(
     backupSource,
     { counted: 200, expected: 190, difference: 10 },
-    { takenOut: 50 },
+    { takenOut: 50, digitalTakings: 80, recordedBy: backupStaffId },
     MONDAY + DAY
   );
   await recordSales(backupSource, 'MONTH', '2026-01', 48000, 25, 'from the book', MONDAY + DAY);
   await recordSales(backupSource, 'DAY', '2026-07-01', 1400, 25, null, MONDAY + DAY);
+  await setSetting(backupSource, 'currency_code', 'KES', MONDAY + DAY);
+  await recordCreditEntry(
+    backupSource,
+    (await loadCustomers(backupSource))[0].id,
+    'PAYMENT', 15, 'paid on the phone', null, MONDAY + DAY, 'MOBILE_MONEY'
+  );
 
   const backup = await createBackup(backupSource);
-  equal(backup.backup_format_version, 2, 'backup format is independent from schema version');
+  equal(backup.backup_format_version, 6, 'backup format is independent from schema version');
   check(backup.data.products.length > 0, 'backup includes products');
   check(backup.data.stock_movements.length > 0, 'backup includes stock movements');
   check(backup.data.count_sessions.length > 0, 'backup includes count sessions');
@@ -558,6 +614,8 @@ async function run() {
   check(backup.data.expenses.length > 0, 'backup includes expenses');
   check(backup.data.cash_ups.length > 0, 'backup includes cash-ups');
   equal(backup.data.sales_entries.length, 2, 'backup includes the sales book');
+  equal(backup.data.settings.length, 1, 'backup includes settings');
+  equal(backup.data.staff_members.length, 1, 'backup includes staff');
 
   const { db: backupTarget } = await freshDb();
   // A sales entry the backup does not know about: restore must replace it,
@@ -565,6 +623,7 @@ async function run() {
   await recordSales(backupTarget, 'MONTH', '2020-01', 999, 10, 'stale', MONDAY);
   await restoreBackup(backupTarget, backup);
   equal((await loadProducts(backupTarget))[0].name, 'Bread', 'restored product round-trips');
+  equal((await loadProducts(backupTarget))[0].barcode, '600100000001', 'product barcode round-trips');
   equal((await loadMovements(backupTarget)).length, backup.data.stock_movements.length, 'all movements restore');
   equal((await loadCustomers(backupTarget))[0].name, 'Lerato', 'customers restore');
   equal((await loadCreditEntries(backupTarget))[0].amount, 35, 'credit ledger restores');
@@ -575,6 +634,14 @@ async function run() {
   check(!restoredSales.some(e => e.notes === 'stale'), 'restore clears sales entries missing from the backup');
   equal(restoredSales.find(e => e.period_key === '2026-01')!.amount, 48000, 'sales amounts round-trip');
   equal(restoredSales.find(e => e.period_key === '2026-01')!.margin_pct, 25, 'sales margins round-trip');
+  equal(await getSetting(backupTarget, 'currency_code'), 'KES', 'the shop currency travels inside the backup');
+  const restoredStaff = await loadStaffMembers(backupTarget);
+  equal(restoredStaff.length, 1, 'staff restore');
+  equal(restoredStaff[0].name, 'Sipho', 'staff names round-trip');
+  const restoredPayment = (await loadCreditEntries(backupTarget)).find(e => e.type === 'PAYMENT')!;
+  equal(restoredPayment.payment_method, 'MOBILE_MONEY', 'how a payment arrived round-trips');
+  equal((await loadCashUps(backupTarget))[0].digital_takings, 80, 'digital takings round-trip');
+  equal((await loadCashUps(backupTarget))[0].recorded_by, backupStaffId, 'who ran the cash-up round-trips');
 
   const brokenBackup = structuredClone(backup);
   brokenBackup.data.expenses[0].category = 'STOCK';
@@ -616,10 +683,14 @@ async function run() {
       cash_ups: backup.data.cash_ups,
     },
   });
-  equal(v1.backup_format_version, 2, 'format-1 backup is upgraded');
+  equal(v1.backup_format_version, 6, 'format-1 backup is upgraded');
   equal(v1.data.sales_entries.length, 0, 'format-1 backup gets an explicit empty sales book');
+  equal(v1.data.settings.length, 0, 'format-1 backup gets explicit empty settings');
+  equal(v1.data.staff_members.length, 0, 'format-1 backup gets an explicit empty staff list');
+  equal(v1.data.products[0].barcode, null, 'format-1 backup cannot leak a newer barcode field');
   await restoreBackup(backupTarget, v1);
   equal((await loadSalesEntries(backupTarget)).length, 0, 'restoring a format-1 backup replaces the sales book too');
+  equal(await getSetting(backupTarget, 'currency_code'), null, 'restoring a format-1 backup clears newer settings');
   equal((await loadCustomers(backupTarget))[0].name, 'Lerato', 'format-1 restore keeps its seven tables');
 
   const legacy = normaliseBackup({
@@ -632,7 +703,7 @@ async function run() {
       count_sessions: backup.data.count_sessions,
     },
   });
-  equal(legacy.backup_format_version, 2, 'legacy pre-pilot backup is upgraded');
+  equal(legacy.backup_format_version, 6, 'legacy pre-pilot backup is upgraded');
   equal(legacy.data.customers.length, 0, 'missing legacy tables become explicit empty sets');
   equal(legacy.data.sales_entries.length, 0, 'legacy backups get an explicit empty sales book');
 

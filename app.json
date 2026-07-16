@@ -2,6 +2,7 @@
   "expo": {
     "name": "ShopTrackApp",
     "slug": "ShopTrackApp",
+    "scheme": "shoptrack",
     "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -31,6 +32,24 @@
       "eas": {
         "projectId": "af856447-125e-482e-8fc8-65b4cc538304"
       }
-    }
+    },
+    "plugins": [
+      "@sentry/react-native",
+      "expo-secure-store",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Allow ShopTrack to hear a number when you choose voice count.",
+          "speechRecognitionPermission": "Allow ShopTrack to turn an on-device spoken count into a number."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow ShopTrack to scan a barcode when you choose the product finder.",
+          "barcodeScannerEnabled": true
+        }
+      ]
+    ]
   }
 }

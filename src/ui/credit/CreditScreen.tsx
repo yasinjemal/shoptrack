@@ -23,6 +23,7 @@ import {
   Alert,
   TextInput,
   ScrollView,
+  Share,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import type { SQLiteDatabase } from 'expo-sqlite';
@@ -30,10 +31,13 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 import {
   calculateCreditSummary,
   dueDateOptions,
+  PAYMENT_METHODS,
   type CreditSummary,
   type CustomerBalance,
   type DueOptionKey,
+  type PaymentMethod,
 } from '../../core/credit';
+import { paymentMethodLabel } from '../../core/countryPacks';
 import {
   addCustomerToBook,
   loadCreditEntries,
@@ -41,8 +45,14 @@ import {
   recordCreditEntry,
 } from '../../core/db';
 import { getPeriodBounds } from '../../core/calculations';
+import { formatMoney, getCurrentCurrency } from '../../core/currency';
 import { styles } from '../styles';
 import { creditStyles as cs } from './styles';
+import { buildCreditReminder, buildPaymentReceipt } from '../../core/messages';
+import { renderShareMessage } from '../../i18n/messages';
+import { renderCreditStatement } from '../../i18n/statements';
+import { SpeakButton } from '../components/SpeakButton';
+import type { Strings } from '../../i18n';
 
 type Mode =
   | { kind: 'list' }
@@ -88,6 +98,22 @@ export interface CreditStrings {
   CREDIT_OWES_YOU_CHANGE: string;
   CREDIT_CURRENT_OWES: (amount: string) => string;
   CREDIT_CURRENT_CHANGE: (amount: string) => string;
+  CREDIT_PAYMENT_METHOD: string;
+  CREDIT_PAYMENT_METHOD_LABEL: (method: PaymentMethod) => string;
+  CREDIT_PROJECTED_OWES: (name: string, amount: string) => string;
+  CREDIT_PROJECTED_CHANGE: (amount: string) => string;
+  SHARE_REMINDER: string;
+  SHARE_RECEIPT: string;
+  SHARE_CREDIT_REMINDER: (name: string, amount: string, days: number | null) => string;
+  SHARE_CREDIT_OVERDUE: (name: string, amount: string, days: number) => string;
+  SHARE_PAYMENT_RECEIPT: (name: string, amount: string, method: string, remaining: string, when: string) => string;
+  SHARE_COUNT_SUMMARY: (units: number, profit: string, counts: number) => string;
+  SHARE_CASHUP_VERDICT: (verdict: 'balanced' | 'short' | 'over') => string;
+  SHARE_CASHUP_SUMMARY: (verdict: string, counted: string, expected: string, gap: string, digital: string) => string;
+  FORMAT_WHEN: (ts: number) => string;
+  READ_ALOUD: string;
+  STOP_READING: string;
+  SPEECH_LOCALE: string;
   ERROR_GENERIC: string;
 }
 
@@ -182,11 +208,11 @@ export function CreditScreen({
               {summary.total_outstanding > 0 && (
                 <View style={cs.totalCard}>
                   <Text style={cs.totalLabel}>{strings.CREDIT_OUTSTANDING_LABEL}</Text>
-                  <Text style={cs.totalAmount}>R{summary.total_outstanding.toFixed(2)}</Text>
+                  <Text style={cs.totalAmount}>{formatMoney(summary.total_outstanding)}</Text>
                   <Text style={cs.totalHint}>
                     {strings.CREDIT_WEEK_SUMMARY(
-                      `R${summary.credit_given.toFixed(2)}`,
-                      `R${summary.payments_received.toFixed(2)}`
+                      formatMoney(summary.credit_given),
+                      formatMoney(summary.payments_received)
                     )}
                   </Text>
                 </View>
@@ -198,7 +224,7 @@ export function CreditScreen({
                   <Text style={cs.overdueTitle}>{strings.CREDIT_OVERDUE_TITLE}</Text>
                   {summary.overdue_debts.map(d => (
                     <Text key={d.customer_id} style={cs.overdueItem}>
-                      • {d.customer_name} — R{d.balance.toFixed(2)},{' '}
+                      • {d.customer_name} — {formatMoney(d.balance)},{' '}
                       {strings.CREDIT_OVERDUE_BY(d.days_overdue ?? 0)}
                     </Text>
                   ))}
@@ -211,7 +237,7 @@ export function CreditScreen({
                   <Text style={cs.staleTitle}>{strings.CREDIT_STALE_TITLE}</Text>
                   {summary.stale_debts.map(d => (
                     <Text key={d.customer_id} style={cs.staleItem}>
-                      • {d.customer_name} — R{d.balance.toFixed(2)},{' '}
+                      • {d.customer_name} — {formatMoney(d.balance)},{' '}
                       {strings.CREDIT_DAYS_QUIET(d.days_since_activity ?? 0)}
                     </Text>
                   ))}
@@ -226,6 +252,10 @@ export function CreditScreen({
                   strings={strings}
                   onGive={() => setMode({ kind: 'entry', customer: balance, type: 'CREDIT' })}
                   onReceive={() => setMode({ kind: 'entry', customer: balance, type: 'PAYMENT' })}
+                  onRemind={() => {
+                    if (balance.balance <= 0) return;
+                    void Share.share({ message: renderShareMessage(buildCreditReminder(balance), strings) });
+                  }}
                 />
               ))}
 
@@ -256,11 +286,13 @@ function CustomerRow({
   strings,
   onGive,
   onReceive,
+  onRemind,
 }: {
   balance: CustomerBalance;
   strings: CreditStrings;
   onGive: () => void;
   onReceive: () => void;
+  onRemind: () => void;
 }) {
   const owesShop = balance.balance > 0;
   const isSettled = balance.balance === 0;
@@ -275,7 +307,7 @@ function CustomerRow({
           <Text style={cs.customerSettledTag}>{strings.CREDIT_PAID_UP_TAG}</Text>
         ) : (
           <Text style={[cs.customerBalance, !owesShop && cs.customerBalanceCredit]}>
-            R{Math.abs(balance.balance).toFixed(2)}
+            {formatMoney(Math.abs(balance.balance))}
           </Text>
         )}
       </View>
@@ -283,6 +315,13 @@ function CustomerRow({
       <Text style={[cs.customerMeta, balance.is_overdue && cs.customerMetaOverdue]}>
         {describeMeta(balance, strings)}
       </Text>
+
+      {!isSettled && (
+        <SpeakButton
+          text={renderCreditStatement(balance.statement, strings as Strings)}
+          strings={strings}
+        />
+      )}
 
       <View style={cs.customerActions}>
         <TouchableOpacity style={cs.giveButton} onPress={onGive}>
@@ -292,6 +331,11 @@ function CustomerRow({
         {!isSettled && (
           <TouchableOpacity style={cs.receiveButton} onPress={onReceive}>
             <Text style={cs.receiveButtonText}>{strings.CREDIT_RECEIVE}</Text>
+          </TouchableOpacity>
+        )}
+        {owesShop && (
+          <TouchableOpacity style={cs.receiveButton} onPress={onRemind}>
+            <Text style={cs.receiveButtonText}>{strings.SHARE_REMINDER}</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -323,7 +367,7 @@ function describeMeta(balance: CustomerBalance, strings: CreditStrings): string 
 
 function describeCurrent(balance: CustomerBalance, strings: CreditStrings): string {
   if (balance.balance === 0) return strings.CREDIT_PAID_UP;
-  const amount = `R${Math.abs(balance.balance).toFixed(2)}`;
+  const amount = formatMoney(Math.abs(balance.balance));
   return balance.balance > 0
     ? strings.CREDIT_CURRENT_OWES(amount)
     : strings.CREDIT_CURRENT_CHANGE(amount);
@@ -410,7 +454,7 @@ function AddCustomerScreen({
 
         <Text style={styles.inputLabel}>{strings.CREDIT_TAKING_NOW}</Text>
         <View style={styles.priceInputRow}>
-          <Text style={styles.currencyPrefix}>R</Text>
+          <Text style={styles.currencyPrefix}>{getCurrentCurrency().symbol}</Text>
           <TextInput
             style={styles.priceInput}
             value={amount}
@@ -493,6 +537,7 @@ function RecordEntryScreen({
   const [amount, setAmount] = useState('');
   const [notes, setNotes] = useState('');
   const [due, setDue] = useState<DueOptionKey | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('CASH');
   const [saving, setSaving] = useState(false);
 
   const options = dueDateOptions();
@@ -504,7 +549,7 @@ function RecordEntryScreen({
     ? customer.balance + value
     : customer.balance - value;
 
-  const handleSave = async () => {
+  const handleSave = async (shareReceipt = false) => {
     if (!canSave) return;
     setSaving(true);
     try {
@@ -515,8 +560,24 @@ function RecordEntryScreen({
         type,
         value,
         notes || null,
-        chosen?.at ?? null
+        chosen?.at ?? null,
+        Date.now(),
+        type === 'PAYMENT' ? paymentMethod : null
       );
+      if (shareReceipt && type === 'PAYMENT') {
+        await Share.share({
+          message: renderShareMessage(
+            buildPaymentReceipt(
+              customer.customer_name,
+              value,
+              paymentMethod,
+              projected,
+              Date.now()
+            ),
+            strings
+          ),
+        });
+      }
       onSaved();
     } catch (error) {
       console.error('Record credit entry error:', error);
@@ -545,7 +606,7 @@ function RecordEntryScreen({
 
         <Text style={styles.inputLabel}>{strings.CREDIT_AMOUNT}</Text>
         <View style={styles.priceInputRow}>
-          <Text style={styles.currencyPrefix}>R</Text>
+          <Text style={styles.currencyPrefix}>{getCurrentCurrency().symbol}</Text>
           <TextInput
             style={styles.priceInput}
             value={amount}
@@ -559,10 +620,10 @@ function RecordEntryScreen({
         {value > 0 && (
           <Text style={styles.costSummary}>
             {projected > 0
-              ? `${customer.customer_name} will owe R${projected.toFixed(2)}`
+              ? strings.CREDIT_PROJECTED_OWES(customer.customer_name, formatMoney(projected))
               : projected === 0
                 ? strings.CREDIT_PAID_UP
-                : `You will owe R${Math.abs(projected).toFixed(2)} in change`}
+                : strings.CREDIT_PROJECTED_CHANGE(formatMoney(Math.abs(projected)))}
           </Text>
         )}
 
@@ -594,15 +655,44 @@ function RecordEntryScreen({
           </>
         )}
 
+        {type === 'PAYMENT' && (
+          <>
+            <Text style={styles.inputLabel}>{strings.CREDIT_PAYMENT_METHOD}</Text>
+            <View style={cs.dueGrid}>
+              {PAYMENT_METHODS.map(method => (
+                <TouchableOpacity
+                  key={method}
+                  style={[cs.dueChip, paymentMethod === method && cs.dueChipActive]}
+                  onPress={() => setPaymentMethod(method)}
+                >
+                  <Text style={[cs.dueChipText, paymentMethod === method && cs.dueChipTextActive]}>
+                    {paymentMethodLabel(method, strings.CREDIT_PAYMENT_METHOD_LABEL(method))}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
+
         <TouchableOpacity
           style={[styles.saveButton, !canSave && styles.saveButtonDisabled]}
-          onPress={handleSave}
+          onPress={() => handleSave(false)}
           disabled={!canSave}
         >
           <Text style={styles.saveButtonText}>
             {saving ? strings.CREDIT_SAVING : strings.CREDIT_SAVE}
           </Text>
         </TouchableOpacity>
+
+        {type === 'PAYMENT' && (
+          <TouchableOpacity
+            style={[styles.doneButton, !canSave && styles.saveButtonDisabled]}
+            onPress={() => handleSave(true)}
+            disabled={!canSave}
+          >
+            <Text style={styles.doneButtonText}>{strings.SHARE_RECEIPT}</Text>
+          </TouchableOpacity>
+        )}
 
         <View style={{ height: 32 }} />
       </ScrollView>

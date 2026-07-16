@@ -1,0 +1,43 @@
+appId: com.yasinali69.ShopTrackApp
+name: Critical count and stock-in flow
+---
+- launchApp:
+    clearState: true
+- assertVisible: "Welcome to ShopTrack!"
+- tapOn:
+    id: "home-add-first-product"
+- tapOn:
+    id: "add-product-name"
+- inputText: "Bread"
+- tapOn:
+    id: "add-product-sell-price"
+- inputText: "18"
+- tapOn:
+    id: "add-product-buy-price"
+- inputText: "14"
+- tapOn:
+    id: "add-product-save"
+- tapOn:
+    id: "products-start-count"
+- tapOn:
+    id: "count-input-1"
+- inputText: "10"
+- tapOn:
+    id: "count-review"
+- tapOn:
+    id: "count-save"
+- assertVisible: "First Count Done!"
+- tapOn:
+    id: "count-done"
+- tapOn:
+    id: "home-add-stock"
+- tapOn:
+    id: "stockin-product-1"
+- tapOn:
+    id: "stockin-quantity"
+- inputText: "5"
+- tapOn:
+    id: "stockin-save"
+- assertVisible: "Stock Added!"
+- tapOn: "Done"
+- assertVisible: "ShopTrack"

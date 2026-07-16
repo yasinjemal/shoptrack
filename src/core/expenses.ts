@@ -90,8 +90,14 @@ export interface NetProfit {
    */
   has_expense_data: boolean;
 
-  statement: string;
+  statement: NetProfitStatement;
 }
+
+export type NetProfitStatement =
+  | { kind: 'no_expenses'; gross_profit: number }
+  | { kind: 'loss'; loss: number }
+  | { kind: 'break_even' }
+  | { kind: 'profit'; gross_profit: number; expenses: number; net_profit: number };
 
 // ============================================
 // SUMMARY
@@ -159,20 +165,20 @@ export function calculateNetProfit(
   };
 }
 
-function describeNet(gross: number, expenses: number, net: number): string {
+function describeNet(gross: number, expenses: number, net: number): NetProfitStatement {
   if (expenses === 0) {
-    return `You made R${gross.toFixed(2)} from sales. No expenses recorded yet.`;
+    return { kind: 'no_expenses', gross_profit: gross };
   }
 
   if (net < 0) {
-    return `Your costs were R${Math.abs(net).toFixed(2)} more than you made from sales.`;
+    return { kind: 'loss', loss: Math.abs(net) };
   }
 
   if (net === 0) {
-    return `You broke even: sales covered your costs exactly.`;
+    return { kind: 'break_even' };
   }
 
-  return `You made R${gross.toFixed(2)} from sales, paid R${expenses.toFixed(2)} in costs, and kept R${net.toFixed(2)}.`;
+  return { kind: 'profit', gross_profit: gross, expenses, net_profit: net };
 }
 
 // ============================================
@@ -183,15 +189,6 @@ function describeNet(gross: number, expenses: number, net: number): string {
  * Category keys are stable identifiers stored in the database; this maps them
  * to something an owner reads. Kept here so every screen labels them the same.
  */
-export const CATEGORY_LABELS: Record<ExpenseCategory, string> = {
-  RENT: 'Rent',
-  ELECTRICITY: 'Electricity',
-  TRANSPORT: 'Transport',
-  WAGES: 'Wages',
-  AIRTIME: 'Airtime & data',
-  OTHER: 'Other',
-};
-
 export const CATEGORY_ICONS: Record<ExpenseCategory, string> = {
   RENT: '🏠',
   ELECTRICITY: '💡',

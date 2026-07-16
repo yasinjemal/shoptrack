@@ -32,6 +32,8 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import type { SQLiteDatabase } from 'expo-sqlite';
+import { formatMoney, getCurrentCurrency } from '../../core/currency';
+import { localCalendarDayLabel } from '../../core/localDate';
 
 import {
   calculateMonth,
@@ -126,7 +128,7 @@ export function YearPicker({
                 {formatMonth(key).split(' ')[0]}
               </Text>
               {filled ? (
-                <Text style={cal.monthTileAmount}>R{month.sales.toFixed(0)}</Text>
+                <Text style={cal.monthTileAmount}>{formatMoney(month.sales, 0)}</Text>
               ) : (
                 <Text style={cal.monthTileEmpty}>{future ? '' : '—'}</Text>
               )}
@@ -229,9 +231,9 @@ export function MonthCalendar({
         <Text style={cal.runningTotalLabel}>
           {strings.SALES_DAYS_FILLED(filled.length, days.length)}
         </Text>
-        <Text style={cal.runningTotalAmount}>R{total.toFixed(2)}</Text>
+        <Text style={cal.runningTotalAmount}>{formatMoney(total)}</Text>
         {total > 0 && marginValid && (
-          <Text style={cal.runningTotalProfit}>{strings.SALES_WILL_KEEP(`R${keeps.toFixed(2)}`)}</Text>
+          <Text style={cal.runningTotalProfit}>{strings.SALES_WILL_KEEP(formatMoney(keeps))}</Text>
         )}
       </View>
 
@@ -240,15 +242,17 @@ export function MonthCalendar({
 
         {days.map(d => {
           const value = amounts[d] ?? '';
+          const localDate = localCalendarDayLabel(d);
           return (
             <View key={d} style={[cal.dayRow, isWeekend(d) && cal.dayRowWeekend]}>
               <View style={cal.dayLabel}>
                 <Text style={cal.dayNumber}>{dayNumber(d)}</Text>
                 <Text style={cal.dayWeekday}>{weekdayLabel(d)}</Text>
+                {localDate && <Text style={cal.dayWeekday}>{localDate}</Text>}
               </View>
 
               <View style={[cal.dayInputWrap, value !== '' && cal.dayInputWrapFilled]}>
-                <Text style={cal.dayCurrency}>R</Text>
+                <Text style={cal.dayCurrency}>{getCurrentCurrency().symbol}</Text>
                 <TextInput
                   style={cal.dayInput}
                   value={value}
@@ -274,7 +278,9 @@ export function MonthCalendar({
           />
           <Text style={styles.currencyPrefix}>%</Text>
         </View>
-        <Text style={styles.inputHint}>{strings.SALES_MARGIN_HINT}</Text>
+        <Text style={styles.inputHint}>
+          {strings.SALES_MARGIN_HINT(formatMoney(100, 0), formatMoney(20, 0), formatMoney(30, 0))}
+        </Text>
 
         <View style={{ height: 100 }} />
       </ScrollView>

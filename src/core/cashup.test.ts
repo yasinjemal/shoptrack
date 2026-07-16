@@ -38,6 +38,7 @@ function flows(over: Partial<CashFlowInputs> = {}): CashFlowInputs {
   return {
     opening: 0,
     revenue: 0,
+    digitalTakings: 0,
     creditGiven: 0,
     paymentsReceived: 0,
     expenses: 0,
@@ -53,7 +54,7 @@ console.log('========================================');
 
 const plain = calculateExpectedCash(flows({ opening: 500, revenue: 1200 }));
 equal(plain.expected, 1700, 'opening plus sales');
-equal(plain.lines.length, 6, 'every line of the trail is shown, including zeros');
+equal(plain.lines.length, 7, 'every line of the trail is shown, including zeros');
 equal(plain.lines[0].key, 'opening', 'the trail starts with what was there');
 equal(plain.lines[0].direction, 'opening', 'opening is neither in nor out');
 equal(plain.lines[1].direction, 'in', 'revenue is money in');
@@ -84,6 +85,14 @@ const withPayments = calculateExpectedCash(flows({
   paymentsReceived: 250,
 }));
 equal(withPayments.expected, 1650, 'old debts paid today add cash back');
+
+const splitTakings = calculateExpectedCash(flows({
+  opening: 500,
+  revenue: 1200,
+  digitalTakings: 400,
+}));
+equal(splitTakings.expected, 1300, 'money in the phone is not expected in the drawer');
+equal(splitTakings.lines.find(l => l.key === 'digital_takings')?.amount, 400, 'the digital split is visible in the trail');
 
 // ============================================
 console.log('');
@@ -130,7 +139,7 @@ const fullDay = flows({
   expenses: 450,
   stockPurchases: 800,
 });
-// 500 + 2400 - 300 + 150 - 450 - 800
+// 500 + 2400 - 0 digital - 300 + 150 - 450 - 800
 equal(calculateExpectedCash(fullDay).expected, 1500, 'the whole trail adds up');
 
 // ============================================
@@ -156,10 +165,7 @@ equal(
   'a cent past tolerance is short'
 );
 
-check(
-  reconcile(1500, 1500, 3000).statement.includes('matches'),
-  'a balanced till says so plainly'
-);
+equal(reconcile(1500, 1500, 3000).statement.kind, 'balanced', 'a balanced till has a renderable verdict');
 
 // ============================================
 console.log('');
@@ -171,15 +177,8 @@ const short = reconcile(1500, 1300, 3000);
 equal(short.difference, -200, 'difference is counted minus expected');
 equal(short.verdict, 'short', 'less cash than expected is short');
 equal(short.severity, 'large', 'R200 of a R3000 day is a large gap');
-check(short.statement.includes('R200.00 short'), 'names the amount');
-check(
-  short.statement.includes('not recorded'),
-  'offers a bookkeeping cause rather than accusing anyone'
-);
-check(
-  !/theft|steal|stole|thief/i.test(short.statement),
-  'never accuses anyone of stealing'
-);
+equal(short.statement.kind, 'short_large', 'large shortfall has a distinct renderable kind');
+equal('gap' in short.statement ? short.statement.gap : null, 200, 'names the raw gap without a currency');
 
 // Same gap, much bigger day: proportionally minor.
 const smallForBigShop = reconcile(1500, 1450, 20000);
@@ -199,11 +198,8 @@ console.log('========================================');
 const over = reconcile(1500, 1700, 3000);
 equal(over.difference, 200, 'a surplus is a positive difference');
 equal(over.verdict, 'over', 'more cash than expected reads as over');
-check(over.statement.includes('more than expected'), 'says there is extra');
-check(
-  !/theft|steal|thief/i.test(over.statement),
-  'a surplus is not treated as suspicious'
-);
+equal(over.statement.kind, 'over', 'surplus has a distinct renderable kind');
+equal('gap' in over.statement ? over.statement.gap : null, 200, 'surplus carries the raw gap');
 
 // ============================================
 console.log('');

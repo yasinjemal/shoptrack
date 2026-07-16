@@ -20,7 +20,7 @@
 -- TABLE: products
 -- ============================================
 -- The items a shop sells. Setup is gradual and imperfect.
--- No barcode required. No category required. Keep it simple.
+-- Barcode is optional and only finds a product during count/stock-in.
 --
 -- Prices are nullable on purpose: an owner can add a product before they know
 -- what it costs. Screens omit profit for these rather than showing R0.
@@ -28,6 +28,7 @@
 CREATE TABLE products (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     name                TEXT NOT NULL,                -- "Bread", "Coke 500ml", "Airtime R10"
+    barcode             TEXT,                         -- Optional finder; never a per-sale scan
     unit_label          TEXT DEFAULT 'units',         -- Display only: 'each', 'bottle', 'pack' (no math)
     buy_price           REAL,                         -- What owner pays (cost price); NULL = not yet known
     sell_price          REAL,                         -- What customer pays; NULL = not yet known
@@ -39,6 +40,8 @@ CREATE TABLE products (
 );
 
 CREATE INDEX idx_products_active ON products(is_active);
+CREATE UNIQUE INDEX idx_products_barcode ON products(barcode) WHERE barcode IS NOT NULL;
+CREATE INDEX idx_products_active_name ON products(is_active, name);
 
 
 -- ============================================
@@ -77,6 +80,8 @@ CREATE TABLE stock_movements (
 CREATE INDEX idx_movements_product ON stock_movements(product_id);
 CREATE INDEX idx_movements_type ON stock_movements(type);
 CREATE INDEX idx_movements_date ON stock_movements(recorded_at);
+CREATE INDEX idx_movements_product_type_date ON stock_movements(product_id, type, recorded_at DESC);
+CREATE INDEX idx_movements_type_date ON stock_movements(type, recorded_at DESC);
 
 
 -- ============================================
@@ -92,10 +97,12 @@ CREATE TABLE count_sessions (
     completed_at        INTEGER,                      -- When finished (NULL if incomplete)
     products_counted    INTEGER DEFAULT 0,            -- How many products were counted
     total_products      INTEGER DEFAULT 0,            -- How many were available to count
+    recorded_by         INTEGER REFERENCES staff_members(id),
     notes               TEXT                          -- "End of week count"
 );
 
 CREATE INDEX idx_sessions_date ON count_sessions(started_at);
+CREATE INDEX idx_sessions_completed ON count_sessions(completed_at DESC);
 
 
 -- ============================================
@@ -147,6 +154,13 @@ CREATE TABLE credit_entries (
     amount       REAL NOT NULL CHECK (amount > 0),  -- Always positive; type gives direction
     notes        TEXT,                              -- "Bread and milk"
 
+    -- How a PAYMENT arrived: 'CASH', 'MOBILE_MONEY', 'BANK' or 'OTHER'.
+    -- NULL = unrecorded (every row before schema v8, or the owner didn't say).
+    -- Recording only -- ShopTrack never moves money. Validated in db.ts, not a
+    -- CHECK, because migrated databases gain this column via ALTER TABLE and
+    -- the two shapes must stay identical.
+    payment_method TEXT,
+
     -- When the customer SAID they would pay, on a CREDIT entry. NULL means they
     -- did not say -- common, and it must stay allowed: demanding a date would
     -- stop the owner recording the debt at all. It is a promise, not a
@@ -166,6 +180,7 @@ CREATE TABLE credit_entries (
 
 CREATE INDEX idx_credit_customer ON credit_entries(customer_id);
 CREATE INDEX idx_credit_date ON credit_entries(recorded_at);
+CREATE INDEX idx_credit_customer_date ON credit_entries(customer_id, recorded_at);
 
 
 -- ============================================
@@ -235,6 +250,12 @@ CREATE TABLE cash_ups (
     difference       REAL NOT NULL,                              -- Snapshot: counted - expected
     taken_out        REAL NOT NULL DEFAULT 0 CHECK (taken_out >= 0),
     is_opening       INTEGER NOT NULL DEFAULT 0,  -- First cash-up sets a float, does not reconcile
+
+    -- Takings that arrived digitally (mobile money / card) rather than in the
+    -- drawer. NULL = unrecorded. Lets reconciliation split "cash in the till"
+    -- from "money in the phone" without ever touching the money itself.
+    digital_takings  REAL,
+    recorded_by      INTEGER REFERENCES staff_members(id),
     notes            TEXT,
     recorded_at      INTEGER NOT NULL             -- Unix timestamp (ms)
 );
@@ -293,12 +314,51 @@ CREATE INDEX idx_sales_period ON sales_entries(period, period_key);
 
 
 -- ============================================
+-- TABLE: settings
+-- ============================================
+-- Shop-level preferences that must travel INSIDE backups: currency today,
+-- country pack tomorrow. AsyncStorage holds phone-level preferences
+-- (language); a restored shop must come back in its own currency, so that
+-- lives here.
+
+CREATE TABLE settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    updated_at  INTEGER NOT NULL              -- Unix timestamp (ms)
+);
+
+
+-- ============================================
+-- TABLE: staff_members
+-- ============================================
+-- Staff mode: the people who run the till on one shared phone.
+--
+-- recorded_by on count_sessions and cash_ups points here, so a shortfall can
+-- finally point at a shift instead of a rumour. The PIN is a short code the
+-- owner hands out; it attributes actions, it does not secure them -- anyone
+-- holding the unlocked phone already holds the shop's books. Nullable
+-- everywhere: a shop with no staff never sees this.
+
+CREATE TABLE staff_members (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    pin         TEXT NOT NULL,
+    is_active   INTEGER NOT NULL DEFAULT 1,
+    created_at  INTEGER NOT NULL DEFAULT 0,   -- Unix timestamp (ms)
+    updated_at  INTEGER NOT NULL DEFAULT 0    -- Unix timestamp (ms)
+);
+
+CREATE INDEX idx_staff_active ON staff_members(is_active);
+
+
+-- ============================================
 -- NOT YET IMPLEMENTED
 -- ============================================
--- Earlier drafts of this file defined period_snapshots, product_period_metrics
--- and app_settings. Nothing creates or reads them: the app computes period
--- metrics on demand via calculatePeriodSummary() in src/core/calculations.ts,
--- and stores preferences (language) in AsyncStorage.
+-- Earlier drafts of this file defined period_snapshots and
+-- product_period_metrics. Nothing creates or reads them: the app computes
+-- period metrics on demand via calculatePeriodSummary() in
+-- src/core/calculations.ts. Phone-level preferences (language) live in
+-- AsyncStorage; shop-level ones live in the settings table above.
 --
 -- Pre-computed snapshot tables are worth revisiting only if on-demand
 -- calculation gets slow on a real shop's data. It has not.

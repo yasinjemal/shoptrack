@@ -26,12 +26,13 @@ export interface MigrationDb {
  * Bump this whenever the table shape changes. Every bump after the first pilot
  * build must add a migration below; shop data is never reset to change shape.
  */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 10;
 
 const CREATE_PRODUCTS = `
   CREATE TABLE IF NOT EXISTS products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
+    barcode TEXT,
     unit_label TEXT DEFAULT 'units',
     buy_price REAL,
     sell_price REAL,
@@ -66,6 +67,7 @@ const CREATE_SESSIONS = `
     completed_at INTEGER,
     products_counted INTEGER DEFAULT 0,
     total_products INTEGER DEFAULT 0,
+    recorded_by INTEGER REFERENCES staff_members(id),
     notes TEXT
   );
 `;
@@ -102,16 +104,23 @@ const CREATE_CUSTOMERS = `
  * means they did not say, which is common and must stay allowed -- demanding a
  * date would stop the owner recording the debt at all. It is a promise, not a
  * schedule: nothing enforces it, it only lets the app say "this one is late".
+ *
+ * payment_method is how a PAYMENT arrived: 'CASH', 'MOBILE_MONEY', 'BANK' or
+ * 'OTHER'. Null means unrecorded (every row before schema v8, and any owner
+ * who does not care). Recording only -- ShopTrack never moves money.
+ * Validated in db.ts rather than a CHECK, because the column is added by
+ * ALTER TABLE on migrated databases and the two shapes must stay identical.
  */
 const CREATE_CREDIT_ENTRIES = `
   CREATE TABLE IF NOT EXISTS credit_entries (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    customer_id  INTEGER NOT NULL,
-    type         TEXT NOT NULL CHECK (type IN ('CREDIT', 'PAYMENT')),
-    amount       REAL NOT NULL CHECK (amount > 0),
-    notes        TEXT,
-    due_at       INTEGER,
-    recorded_at  INTEGER NOT NULL,
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_id     INTEGER NOT NULL,
+    type            TEXT NOT NULL CHECK (type IN ('CREDIT', 'PAYMENT')),
+    amount          REAL NOT NULL CHECK (amount > 0),
+    notes           TEXT,
+    payment_method  TEXT,
+    due_at          INTEGER,
+    recorded_at     INTEGER NOT NULL,
     FOREIGN KEY (customer_id) REFERENCES customers(id)
   );
 `;
@@ -163,6 +172,8 @@ const CREATE_CASH_UPS = `
     difference       REAL NOT NULL,
     taken_out        REAL NOT NULL DEFAULT 0 CHECK (taken_out >= 0),
     is_opening       INTEGER NOT NULL DEFAULT 0,
+    digital_takings  REAL,
+    recorded_by      INTEGER REFERENCES staff_members(id),
     notes            TEXT,
     recorded_at      INTEGER NOT NULL
   );
@@ -221,28 +232,70 @@ const CREATE_SALES_ENTRIES = `
   );
 `;
 
+/**
+ * Shop-level preferences that must travel INSIDE backups: currency today,
+ * country pack tomorrow. AsyncStorage holds phone-level preferences
+ * (language); a restored shop must come back in its own currency, so that
+ * lives here.
+ */
+const CREATE_SETTINGS = `
+  CREATE TABLE IF NOT EXISTS settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    updated_at  INTEGER NOT NULL
+  );
+`;
+
+/**
+ * Staff mode: the people who run the till on one shared phone.
+ *
+ * recorded_by on count_sessions and cash_ups points here, so a shortfall can
+ * finally point at a shift instead of a rumour. The PIN is a short code the
+ * owner hands out; it attributes actions, it does not secure them -- anyone
+ * holding the unlocked phone already holds the shop's books. Nullable
+ * everywhere: a shop with no staff never sees this.
+ */
+const CREATE_STAFF = `
+  CREATE TABLE IF NOT EXISTS staff_members (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    pin         TEXT NOT NULL,
+    is_active   INTEGER NOT NULL DEFAULT 1,
+    created_at  INTEGER NOT NULL DEFAULT 0,
+    updated_at  INTEGER NOT NULL DEFAULT 0
+  );
+`;
+
 const CREATE_INDEXES = `
   CREATE INDEX IF NOT EXISTS idx_products_active ON products(is_active);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode) WHERE barcode IS NOT NULL;
+  CREATE INDEX IF NOT EXISTS idx_products_active_name ON products(is_active, name);
   CREATE INDEX IF NOT EXISTS idx_movements_product ON stock_movements(product_id);
   CREATE INDEX IF NOT EXISTS idx_movements_type ON stock_movements(type);
   CREATE INDEX IF NOT EXISTS idx_movements_date ON stock_movements(recorded_at);
+  CREATE INDEX IF NOT EXISTS idx_movements_product_type_date ON stock_movements(product_id, type, recorded_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_movements_type_date ON stock_movements(type, recorded_at DESC);
   CREATE INDEX IF NOT EXISTS idx_sessions_date ON count_sessions(started_at);
+  CREATE INDEX IF NOT EXISTS idx_sessions_completed ON count_sessions(completed_at DESC);
   CREATE INDEX IF NOT EXISTS idx_customers_active ON customers(is_active);
   CREATE INDEX IF NOT EXISTS idx_credit_customer ON credit_entries(customer_id);
   CREATE INDEX IF NOT EXISTS idx_credit_date ON credit_entries(recorded_at);
+  CREATE INDEX IF NOT EXISTS idx_credit_customer_date ON credit_entries(customer_id, recorded_at);
   CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(recorded_at);
   CREATE INDEX IF NOT EXISTS idx_expenses_category ON expenses(category);
   CREATE INDEX IF NOT EXISTS idx_cash_ups_date ON cash_ups(recorded_at);
   CREATE INDEX IF NOT EXISTS idx_sales_period ON sales_entries(period, period_key);
+  CREATE INDEX IF NOT EXISTS idx_staff_active ON staff_members(is_active);
 `;
 
 
 /**
  * Upgrade a database created by an earlier committed ShopTrack schema.
  *
- * Versions 2→3, 3→4 and 5→6 only added tables. Version 4→5 added the nullable
- * due_at column. They are intentionally small, additive migrations: all rows
- * remain in place and a partially completed v4→5 step can safely resume.
+ * Versions 2→3, 3→4, 5→6, 6→7 and 8→9 add tables. Versions 4→5, 7→8 and 8→9
+ * add nullable columns. They are intentionally small, additive migrations:
+ * all rows remain in place and a partially completed column step can safely
+ * resume (every ALTER is guarded by a table_info check).
  */
 async function migrateDatabase(db: MigrationDb, fromVersion: number): Promise<void> {
   let version = fromVersion;
@@ -289,6 +342,59 @@ async function migrateDatabase(db: MigrationDb, fromVersion: number): Promise<vo
     version = 6;
   }
 
+  if (version === 6) {
+    await db.withTransactionAsync(async () => {
+      await db.execAsync(CREATE_SETTINGS);
+      await db.execAsync('PRAGMA user_version = 7;');
+    });
+    version = 7;
+  }
+
+  if (version === 7) {
+    await db.withTransactionAsync(async () => {
+      const creditColumns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(credit_entries)');
+      if (!creditColumns.some(column => column.name === 'payment_method')) {
+        await db.execAsync('ALTER TABLE credit_entries ADD COLUMN payment_method TEXT;');
+      }
+      const cashUpColumns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(cash_ups)');
+      if (!cashUpColumns.some(column => column.name === 'digital_takings')) {
+        await db.execAsync('ALTER TABLE cash_ups ADD COLUMN digital_takings REAL;');
+      }
+      await db.execAsync('PRAGMA user_version = 8;');
+    });
+    version = 8;
+  }
+
+  if (version === 8) {
+    await db.withTransactionAsync(async () => {
+      await db.execAsync(CREATE_STAFF);
+      const sessionColumns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(count_sessions)');
+      if (!sessionColumns.some(column => column.name === 'recorded_by')) {
+        await db.execAsync('ALTER TABLE count_sessions ADD COLUMN recorded_by INTEGER REFERENCES staff_members(id);');
+      }
+      const cashUpColumns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(cash_ups)');
+      if (!cashUpColumns.some(column => column.name === 'recorded_by')) {
+        await db.execAsync('ALTER TABLE cash_ups ADD COLUMN recorded_by INTEGER REFERENCES staff_members(id);');
+      }
+      await db.execAsync('PRAGMA user_version = 9;');
+    });
+    version = 9;
+  }
+
+  if (version === 9) {
+    await db.withTransactionAsync(async () => {
+      const productColumns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(products)');
+      if (!productColumns.some(column => column.name === 'barcode')) {
+        await db.execAsync('ALTER TABLE products ADD COLUMN barcode TEXT;');
+      }
+      await db.execAsync(
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode) WHERE barcode IS NOT NULL;'
+      );
+      await db.execAsync('PRAGMA user_version = 10;');
+    });
+    version = 10;
+  }
+
   if (version !== SCHEMA_VERSION) {
     throw new Error(`No migration path from schema v${fromVersion} to v${SCHEMA_VERSION}.`);
   }
@@ -319,12 +425,14 @@ export async function initDatabase(db: MigrationDb) {
 
   await db.execAsync(CREATE_PRODUCTS);
   await db.execAsync(CREATE_MOVEMENTS);
+  await db.execAsync(CREATE_STAFF);
   await db.execAsync(CREATE_SESSIONS);
   await db.execAsync(CREATE_CUSTOMERS);
   await db.execAsync(CREATE_CREDIT_ENTRIES);
   await db.execAsync(CREATE_EXPENSES);
   await db.execAsync(CREATE_CASH_UPS);
   await db.execAsync(CREATE_SALES_ENTRIES);
+  await db.execAsync(CREATE_SETTINGS);
   await db.execAsync(CREATE_INDEXES);
   await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
 }

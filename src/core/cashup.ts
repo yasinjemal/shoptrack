@@ -55,6 +55,8 @@ export interface CashFlowInputs {
   opening: number;
   /** Sales at selling price for the window -- calculations.ts. */
   revenue: number;
+  /** Portion of revenue received into a phone/bank rather than the drawer. */
+  digitalTakings: number;
   /** Goods that left on credit, so no cash arrived -- credit.ts. */
   creditGiven: number;
   /** Debts settled in the window -- credit.ts. */
@@ -68,7 +70,7 @@ export interface CashFlowInputs {
 export type LineDirection = 'in' | 'out' | 'opening';
 
 export interface CashLine {
-  key: 'opening' | 'revenue' | 'credit_given' | 'payments' | 'expenses' | 'stock';
+  key: 'opening' | 'revenue' | 'digital_takings' | 'credit_given' | 'payments' | 'expenses' | 'stock';
   amount: number;
   direction: LineDirection;
 }
@@ -90,8 +92,14 @@ export interface CashUpResult {
 
   verdict: CashUpVerdict;
   severity: CashUpSeverity;
-  statement: string;
+  statement: CashUpStatement;
 }
+
+export type CashUpStatement =
+  | { kind: 'balanced' }
+  | { kind: 'over'; gap: number }
+  | { kind: 'short_large'; gap: number }
+  | { kind: 'short_small'; gap: number };
 
 /**
  * Cash never reconciles to the cent in a shop that gives change from a tin.
@@ -115,6 +123,7 @@ export function calculateExpectedCash(i: CashFlowInputs): ExpectedCash {
   const expected = round2(
     i.opening
     + i.revenue
+    - i.digitalTakings
     - i.creditGiven
     + i.paymentsReceived
     - i.expenses
@@ -127,6 +136,7 @@ export function calculateExpectedCash(i: CashFlowInputs): ExpectedCash {
   const lines: CashLine[] = [
     { key: 'opening', amount: round2(i.opening), direction: 'opening' },
     { key: 'revenue', amount: round2(i.revenue), direction: 'in' },
+    { key: 'digital_takings', amount: round2(i.digitalTakings), direction: 'out' },
     { key: 'credit_given', amount: round2(i.creditGiven), direction: 'out' },
     { key: 'payments', amount: round2(i.paymentsReceived), direction: 'in' },
     { key: 'expenses', amount: round2(i.expenses), direction: 'out' },
@@ -183,22 +193,20 @@ export function reconcile(
  * first time it was wrong about their family. State the number, offer the
  * likely causes, let them draw the conclusion.
  */
-function describe(verdict: CashUpVerdict, severity: CashUpSeverity, gap: number): string {
+function describe(verdict: CashUpVerdict, severity: CashUpSeverity, gap: number): CashUpStatement {
   if (verdict === 'balanced') {
-    return `Your till matches what the app expected.`;
+    return { kind: 'balanced' };
   }
 
-  const amount = `R${gap.toFixed(2)}`;
-
   if (verdict === 'over') {
-    return `You have ${amount} more than expected. Something sold may not have been counted yet, or a payment was not written down.`;
+    return { kind: 'over', gap };
   }
 
   if (severity === 'large') {
-    return `You are ${amount} short. That is a big gap — check for stock bought, an expense paid, or credit given that was not recorded.`;
+    return { kind: 'short_large', gap };
   }
 
-  return `You are ${amount} short. That is often change given, or a small expense not written down.`;
+  return { kind: 'short_small', gap };
 }
 
 // ============================================
