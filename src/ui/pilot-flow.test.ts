@@ -58,6 +58,29 @@ check(
 // Matches ANY hex literal rather than a list of properties -- the first version
 // of this check listed properties and missed borderLeftColor, which is exactly
 // how #4CAF50 survived the migration.
+// The database is opened once per JS context, through openDatabase(), which
+// caches the promise on globalThis.
+//
+// On web the OPFS access handle is exclusive and nothing ever closes it, so a
+// second open fails with SQLITE_CANTOPEN ("code 14: unable to open database
+// file") and the app cannot read its own data until browser storage is cleared.
+// It shipped: opening lived in a useEffect against a plain module variable, so
+// every remount -- including every Metro fast-refresh -- opened it again.
+//
+// Native does not care, so this only ever breaks on web.
+check(
+  (app.match(/openDatabaseAsync\(/g) ?? []).length === 1,
+  'the database is opened from exactly one place'
+);
+check(
+  /const g = globalThis as DbGlobal/.test(app),
+  'the open is cached on globalThis, so fast-refresh cannot open a second handle'
+);
+check(
+  /delete g\[DB_SLOT\]/.test(app),
+  'a failed open is not cached, so Try again is a real retry'
+);
+
 for (const [name, file] of [
   ['shared', join(root, 'src', 'ui', 'styles.ts')],
   ['credit', join(root, 'src', 'ui', 'credit', 'styles.ts')],

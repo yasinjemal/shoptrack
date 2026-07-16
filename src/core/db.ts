@@ -721,6 +721,57 @@ export async function recordSales(
   );
 }
 
+/**
+ * Save a whole month's worth of days at once.
+ *
+ * One transaction: filling in January from a paper book is a single act, and
+ * half a month landing because the phone died mid-write is worse than none.
+ *
+ * A day the owner left blank is skipped entirely rather than stored as zero --
+ * "I didn't fill that in" and "we took nothing that day" are different facts,
+ * and only the second one is worth recording. To record a closed day, enter 0.
+ *
+ * Also clears any whole-month total for the month being detailed, since the two
+ * would then describe the same trading.
+ */
+export async function recordSalesDays(
+  db: SQLiteDatabase,
+  monthKey: string,
+  days: { dayKey: string; amount: number }[],
+  marginPct: number,
+  now: number = Date.now()
+): Promise<void> {
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      `DELETE FROM sales_entries WHERE period = 'MONTH' AND period_key = ?`,
+      [monthKey]
+    );
+
+    for (const day of days) {
+      await db.runAsync(
+        `INSERT INTO sales_entries (period, period_key, amount, margin_pct, notes, recorded_at)
+         VALUES ('DAY', ?, ?, ?, NULL, ?)
+         ON CONFLICT (period, period_key) DO UPDATE SET
+           amount = excluded.amount,
+           margin_pct = excluded.margin_pct,
+           recorded_at = excluded.recorded_at`,
+        [day.dayKey, day.amount, marginPct, now]
+      );
+    }
+  });
+}
+
+/**
+ * Remove every day recorded for a month. Used when the owner decides a month is
+ * better described by one total than by the days they part-filled.
+ */
+export async function clearMonthDays(db: SQLiteDatabase, monthKey: string): Promise<void> {
+  await db.runAsync(
+    `DELETE FROM sales_entries WHERE period = 'DAY' AND period_key LIKE ?`,
+    [`${monthKey}-%`]
+  );
+}
+
 export async function deleteSalesEntry(db: SQLiteDatabase, id: number): Promise<void> {
   await db.runAsync('DELETE FROM sales_entries WHERE id = ?', [id]);
 }
@@ -879,7 +930,7 @@ export async function undoStockIn(
 // COMPLETE, VERSIONED BACKUP AND RESTORE
 // ============================================
 
-export const BACKUP_FORMAT_VERSION = 1;
+export const BACKUP_FORMAT_VERSION = 2;
 
 export interface ShopTrackBackupData {
   products: any[];
@@ -889,6 +940,7 @@ export interface ShopTrackBackupData {
   credit_entries: any[];
   expenses: any[];
   cash_ups: any[];
+  sales_entries: any[];
 }
 
 export interface ShopTrackBackup {
@@ -900,7 +952,7 @@ export interface ShopTrackBackup {
 }
 
 export async function createBackup(db: SQLiteDatabase): Promise<ShopTrackBackup> {
-  const [products, stockMovements, countSessions, customers, creditEntries, expenses, cashUps] =
+  const [products, stockMovements, countSessions, customers, creditEntries, expenses, cashUps, salesEntries] =
     await Promise.all([
       db.getAllAsync('SELECT * FROM products ORDER BY id'),
       db.getAllAsync('SELECT * FROM stock_movements ORDER BY id'),
@@ -909,6 +961,7 @@ export async function createBackup(db: SQLiteDatabase): Promise<ShopTrackBackup>
       db.getAllAsync('SELECT * FROM credit_entries ORDER BY id'),
       db.getAllAsync('SELECT * FROM expenses ORDER BY id'),
       db.getAllAsync('SELECT * FROM cash_ups ORDER BY id'),
+      db.getAllAsync('SELECT * FROM sales_entries ORDER BY id'),
     ]);
 
   return {
@@ -924,6 +977,7 @@ export async function createBackup(db: SQLiteDatabase): Promise<ShopTrackBackup>
       credit_entries: creditEntries,
       expenses,
       cash_ups: cashUps,
+      sales_entries: salesEntries,
     },
   };
 }
@@ -939,15 +993,20 @@ function rows(value: unknown, name: string): any[] {
   return value;
 }
 
-/** Validate current backups and upgrade the pre-pilot three-table format. */
+/**
+ * Validate current backups and upgrade the older formats: format 1 predates
+ * the sales book (no sales_entries table), and the pre-pilot three-table
+ * format predates versioning entirely.
+ */
 export function normaliseBackup(value: unknown): ShopTrackBackup {
   if (!isRecord(value) || value.shoptrack_backup !== true || !isRecord(value.data)) {
     throw new Error('Not a ShopTrack backup.');
   }
 
   const isCurrent = value.backup_format_version === BACKUP_FORMAT_VERSION;
+  const isV1 = value.backup_format_version === 1;
   const isLegacy = value.backup_format_version == null && value.version === 5;
-  if (!isCurrent && !isLegacy) {
+  if (!isCurrent && !isV1 && !isLegacy) {
     throw new Error('This backup format is not supported.');
   }
 
@@ -969,11 +1028,12 @@ export function normaliseBackup(value: unknown): ShopTrackBackup {
       credit_entries: isLegacy ? [] : rows(data.credit_entries, 'credit_entries'),
       expenses: isLegacy ? [] : rows(data.expenses, 'expenses'),
       cash_ups: isLegacy ? [] : rows(data.cash_ups, 'cash_ups'),
+      sales_entries: isCurrent ? rows(data.sales_entries, 'sales_entries') : [],
     },
   };
 }
 
-/** Replace all seven data sets in a single transaction. */
+/** Replace all eight data sets in a single transaction. */
 export async function restoreBackup(db: SQLiteDatabase, value: unknown): Promise<void> {
   const backup = normaliseBackup(value);
   const data = backup.data;
@@ -983,6 +1043,7 @@ export async function restoreBackup(db: SQLiteDatabase, value: unknown): Promise
       DELETE FROM credit_entries;
       DELETE FROM cash_ups;
       DELETE FROM expenses;
+      DELETE FROM sales_entries;
       DELETE FROM stock_movements;
       DELETE FROM count_sessions;
       DELETE FROM customers;
@@ -1053,6 +1114,16 @@ export async function restoreBackup(db: SQLiteDatabase, value: unknown): Promise
         `INSERT INTO expenses (id, category, amount, notes, recorded_at)
          VALUES (?, ?, ?, ?, ?)`,
         [expense.id, expense.category, expense.amount, expense.notes ?? null, expense.recorded_at]
+      );
+    }
+    for (const entry of data.sales_entries) {
+      await db.runAsync(
+        `INSERT INTO sales_entries (id, period, period_key, amount, margin_pct, notes, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          entry.id, entry.period, entry.period_key, entry.amount, entry.margin_pct,
+          entry.notes ?? null, entry.recorded_at,
+        ]
       );
     }
     for (const cashUp of data.cash_ups) {

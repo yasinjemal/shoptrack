@@ -34,14 +34,13 @@ import {
   calculateSalesHistory,
   dayKey,
   formatMonth,
-  monthKey,
-  monthsBetween,
   DEFAULT_MARGIN_PCT,
   type MonthlySales,
+  type SalesEntry,
   type SalesHistory,
-  type SalesPeriod,
 } from '../../core/sales';
 import { clearMonthSummary, loadSalesEntries, recordSales } from '../../core/db';
+import { MonthCalendar, YearPicker } from './MonthCalendar';
 import { styles } from '../styles';
 import { color } from '../theme';
 import { salesStyles as ss } from './styles';
@@ -60,7 +59,8 @@ export interface SalesStrings {
   SALES_TODAY: string;
   SALES_BACKFILL: string;
   SALES_TOOK_TODAY: string;
-  SALES_TOOK_MONTH: (month: string) => string;
+  SALES_DAYS_FILLED: (filled: number, total: number) => string;
+  SALES_FILL_HINT: string;
   SALES_MARGIN: string;
   SALES_MARGIN_HINT: string;
   SALES_MARGIN_IS_YOURS: string;
@@ -79,7 +79,11 @@ export interface SalesStrings {
 type Mode =
   | { kind: 'list' }
   | { kind: 'today' }
-  | { kind: 'backfill' };
+  // Backfill is two steps now: pick a month, then fill its days. It used to be
+  // one screen per month, which meant seven screens of typing to enter January
+  // through July -- and nothing like how anyone reads a paper book.
+  | { kind: 'pick_month' }
+  | { kind: 'fill_month'; monthKey: string };
 
 export function SalesScreen({
   db,
@@ -93,12 +97,15 @@ export function SalesScreen({
   onChanged: () => void;
 }) {
   const [history, setHistory] = useState<SalesHistory | null>(null);
+  const [entries, setEntries] = useState<SalesEntry[]>([]);
   const [mode, setMode] = useState<Mode>({ kind: 'list' });
   const [loading, setLoading] = useState(true);
 
   const refresh = React.useCallback(async () => {
     try {
-      setHistory(calculateSalesHistory(await loadSalesEntries(db)));
+      const rows = await loadSalesEntries(db);
+      setEntries(rows);
+      setHistory(calculateSalesHistory(rows));
     } catch (error) {
       console.error('Load sales error:', error);
       Alert.alert(strings.ERROR_TITLE, strings.ERROR_GENERIC);
@@ -117,14 +124,40 @@ export function SalesScreen({
     setMode({ kind: 'list' });
   };
 
-  if (mode.kind === 'today' || mode.kind === 'backfill') {
+  const lastMargin = history?.months[0]?.margin_pct ?? null;
+
+  if (mode.kind === 'today') {
     return (
       <EntryScreen
         db={db}
         strings={strings}
-        kind={mode.kind}
-        lastMargin={history?.months[0]?.margin_pct ?? null}
+        lastMargin={lastMargin}
         onCancel={() => setMode({ kind: 'list' })}
+        onSaved={done}
+      />
+    );
+  }
+
+  if (mode.kind === 'pick_month') {
+    return (
+      <YearPicker
+        entries={entries}
+        strings={strings}
+        onPick={key => setMode({ kind: 'fill_month', monthKey: key })}
+        onCancel={() => setMode({ kind: 'list' })}
+      />
+    );
+  }
+
+  if (mode.kind === 'fill_month') {
+    return (
+      <MonthCalendar
+        db={db}
+        monthKey={mode.monthKey}
+        entries={entries}
+        defaultMargin={lastMargin ?? DEFAULT_MARGIN_PCT}
+        strings={strings}
+        onCancel={() => setMode({ kind: 'pick_month' })}
         onSaved={done}
       />
     );
@@ -206,7 +239,7 @@ export function SalesScreen({
             <Pressable
               style={({ pressed }) => [ss.secondaryButton, pressed && ss.secondaryButtonPressed]}
               android_ripple={{ color: color.ripple }}
-              onPress={() => setMode({ kind: 'backfill' })}
+              onPress={() => setMode({ kind: 'pick_month' })}
             >
               <Text style={ss.secondaryButtonText}>{strings.SALES_BACKFILL}</Text>
             </Pressable>
@@ -241,33 +274,27 @@ function MonthRow({ month, strings }: { month: MonthlySales; strings: SalesStrin
  * One screen for both "today's takings" and "a month from the book". They ask
  * for the same two numbers; only the period differs.
  */
+/**
+ * Today's takings. One number, one margin, done.
+ *
+ * Past months no longer come through here -- they open a calendar instead, so
+ * this screen has exactly one job.
+ */
 function EntryScreen({
   db,
   strings,
-  kind,
   lastMargin,
   onCancel,
   onSaved,
 }: {
   db: SQLiteDatabase;
   strings: SalesStrings;
-  kind: 'today' | 'backfill';
   lastMargin: number | null;
   onCancel: () => void;
   onSaved: () => void;
 }) {
   const now = Date.now();
-  const thisMonth = monthKey(now);
 
-  // Offer the last 24 months, newest first. Enough for any paper book anyone
-  // will actually type in, and it means January is two taps away in July.
-  const [year, mon] = thisMonth.split('-').map(Number);
-  const startYear = mon >= 12 ? year - 1 : year - 2;
-  const options = monthsBetween(`${startYear}-${String(mon).padStart(2, '0')}`, thisMonth)
-    .reverse()
-    .slice(0, 24);
-
-  const [month, setMonth] = useState(thisMonth);
   const [amount, setAmount] = useState('');
   // Default to what they said last time; the app never invents a margin
   // silently, but re-asking every day would be its own kind of rude.
@@ -285,9 +312,7 @@ function EntryScreen({
     if (!canSave) return;
     setSaving(true);
     try {
-      const period: SalesPeriod = kind === 'today' ? 'DAY' : 'MONTH';
-      const key = kind === 'today' ? dayKey(now) : month;
-      await recordSales(db, period, key, takings, marginPct, null, now);
+      await recordSales(db, 'DAY', dayKey(now), takings, marginPct, null, now);
       onSaved();
     } catch (error) {
       console.error('Record sales error:', error);
@@ -304,35 +329,12 @@ function EntryScreen({
         <Pressable onPress={onCancel} hitSlop={8}>
           <Text style={styles.backButton}>{strings.SALES_CANCEL}</Text>
         </Pressable>
-        <Text style={styles.screenTitle}>
-          {kind === 'today' ? strings.SALES_TODAY : strings.SALES_BACKFILL}
-        </Text>
+        <Text style={styles.screenTitle}>{strings.SALES_TODAY}</Text>
         <View style={{ width: 50 }} />
       </View>
 
       <ScrollView style={ss.form} keyboardShouldPersistTaps="handled">
-        {kind === 'backfill' && (
-          <>
-            <Text style={styles.inputLabel}>{strings.SALES_PICK_MONTH}</Text>
-            <View style={ss.monthGrid}>
-              {options.map(key => (
-                <Pressable
-                  key={key}
-                  style={[ss.monthChip, month === key && ss.monthChipActive]}
-                  onPress={() => setMonth(key)}
-                >
-                  <Text style={[ss.monthChipText, month === key && ss.monthChipTextActive]}>
-                    {formatMonth(key)}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-          </>
-        )}
-
-        <Text style={styles.inputLabel}>
-          {kind === 'today' ? strings.SALES_TOOK_TODAY : strings.SALES_TOOK_MONTH(formatMonth(month))}
-        </Text>
+        <Text style={styles.inputLabel}>{strings.SALES_TOOK_TODAY}</Text>
         <View style={styles.priceInputRow}>
           <Text style={styles.currencyPrefix}>R</Text>
           <TextInput
@@ -341,7 +343,7 @@ function EntryScreen({
             onChangeText={setAmount}
             placeholder="0.00"
             keyboardType="decimal-pad"
-            autoFocus={kind === 'today'}
+            autoFocus
           />
         </View>
 

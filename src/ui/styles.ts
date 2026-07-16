@@ -10,7 +10,7 @@
 
 import { StyleSheet } from 'react-native';
 
-import { color, elevation, radius, space, type } from './theme';
+import { color, elevation, radius, space, touch, type } from './theme';
 
 export const styles = StyleSheet.create({
   // Loading
@@ -37,24 +37,34 @@ export const styles = StyleSheet.create({
   },
 
   // Home header
+  // A header, not a splash screen.
+  //
+  // This was 24pt of padding on top of 60, with the name at 32pt — about a
+  // sixth of a small phone's screen, spent telling a daily user the name of the
+  // app they just opened. The profit figure was pushed below the fold on the
+  // very screen that exists to show it.
+  //
+  // paddingTop still clears the status bar: React Native's SafeAreaView only
+  // insets on iOS, so on Android this padding is the only thing holding the
+  // green off the clock.
   homeHeader: {
-    padding: 24,
-    paddingTop: 60,
+    paddingHorizontal: space.base,
+    paddingTop: 44,
+    paddingBottom: space.md,
     backgroundColor: color.green,
   },
   homeContent: {
     flex: 1,
   },
   appName: {
-    fontSize: 32,
-    fontWeight: '700',
+    ...type.h2,
     color: color.onAction,
   },
   tagline: {
-    fontSize: 16,
+    ...type.caption,
     color: color.onAction,
     opacity: 0.9,
-    marginTop: 4,
+    marginTop: 2,
   },
 
   // Profit card — the reason the app exists, so it gets the most weight on the
@@ -128,6 +138,24 @@ export const styles = StyleSheet.create({
     lineHeight: 21,
     marginBottom: 20,
   },
+  dbErrorRetry: {
+    backgroundColor: color.green,
+    paddingVertical: space.md,
+    paddingHorizontal: space['2xl'],
+    borderRadius: radius.md,
+    minHeight: touch.minTarget,
+    justifyContent: 'center',
+    marginBottom: space.lg,
+    ...elevation.action,
+  },
+  dbErrorRetryPressed: {
+    backgroundColor: color.greenPressed,
+  },
+  dbErrorRetryText: {
+    ...type.bodyStrong,
+    color: color.onAction,
+  },
+
   // The raw error, for whoever is debugging this rather than shopping.
   dbErrorDetail: {
     fontSize: 11,

@@ -141,36 +141,9 @@ export const salesStyles = StyleSheet.create({
     color: color.inkSecondary,
   },
 
-  // Month picker
-  monthGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: space.sm,
-    marginTop: space.xs,
-  },
-  monthChip: {
-    paddingVertical: space.md,
-    paddingHorizontal: space.base,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: color.border,
-    backgroundColor: color.surface,
-    // Past the 44pt minimum: this is the most-tapped control when backfilling.
-    minHeight: 44,
-    justifyContent: 'center',
-  },
-  monthChipActive: {
-    borderColor: color.greenBorder,
-    backgroundColor: color.greenSoft,
-  },
-  monthChipText: {
-    ...type.label,
-    color: color.inkSecondary,
-  },
-  monthChipTextActive: {
-    color: color.greenInk,
-    fontWeight: '600',
-  },
+  // The month chips that used to live here are gone: picking a month is now a
+  // year grid in calendarStyles.ts, because a row of chips could not show which
+  // months were already filled in.
 
   marginNote: {
     ...type.caption,

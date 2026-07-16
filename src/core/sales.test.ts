@@ -11,10 +11,16 @@ import {
   calculateSalesHistory,
   summariseSalesBook,
   dayKey,
+  dayNumber,
+  daysInMonth,
+  isFuture,
+  isWeekend,
   monthKey,
   monthOf,
   monthsBetween,
+  monthsOfYear,
   formatMonth,
+  weekdayLabel,
   DEFAULT_MARGIN_PCT,
   type SalesEntry,
 } from './sales';
@@ -255,6 +261,59 @@ equal(cents.sales, 0.3, 'takings are rounded to cents');
 equal(cents.profit, 0.3, 'profit is rounded to cents');
 
 check(DEFAULT_MARGIN_PCT > 0 && DEFAULT_MARGIN_PCT < 100, 'the suggested margin is a sane percentage');
+
+// ============================================
+console.log('');
+console.log('========================================');
+console.log('TEST: opening a month shows its days');
+console.log('========================================');
+
+const jan2026 = daysInMonth('2026-01');
+equal(jan2026.length, 31, 'January has 31 days');
+equal(jan2026[0], '2026-01-01', 'starts on the 1st');
+equal(jan2026[30], '2026-01-31', 'ends on the 31st');
+
+// Month lengths are derived, not tabulated, so February looks after itself.
+equal(daysInMonth('2026-02').length, 28, 'February 2026 has 28 days');
+equal(daysInMonth('2024-02').length, 29, 'February 2024 is a leap year');
+equal(daysInMonth('2000-02').length, 29, 'the year 2000 is a leap year');
+equal(daysInMonth('1900-02').length, 28, '1900 is not, despite dividing by 4');
+equal(daysInMonth('2026-04').length, 30, 'April has 30 days');
+equal(daysInMonth('2026-12').length, 31, 'December has 31 days');
+
+equal(dayNumber('2026-01-14'), 14, 'a day key reads back its own number');
+equal(dayNumber('2026-01-01'), 1, 'the 1st is 1, not 01');
+
+// 1 January 2026 is a Thursday.
+check(weekdayLabel('2026-01-01', 'en-ZA').startsWith('Thu'), 'weekday labels are real weekdays');
+equal(isWeekend('2026-01-03'), true, 'Saturday is a weekend');
+equal(isWeekend('2026-01-04'), true, 'Sunday is a weekend');
+equal(isWeekend('2026-01-05'), false, 'Monday is not');
+
+// ============================================
+console.log('');
+console.log('========================================');
+console.log('TEST: you cannot record next Tuesday');
+console.log('========================================');
+
+const todayLocal = new Date(2026, 6, 15, 12, 0, 0).getTime();
+equal(isFuture('2026-07-16', todayLocal), true, 'tomorrow is in the future');
+equal(isFuture('2026-07-15', todayLocal), false, 'today is not the future');
+equal(isFuture('2026-07-14', todayLocal), false, 'yesterday is not the future');
+equal(isFuture('2026-08-01', todayLocal), true, 'next month is the future');
+equal(isFuture('2025-12-31', todayLocal), false, 'last year is not the future');
+
+// ============================================
+console.log('');
+console.log('========================================');
+console.log('TEST: a year of months to choose from');
+console.log('========================================');
+
+const year = monthsOfYear(2026);
+equal(year.length, 12, 'a year has twelve months');
+equal(year[0], '2026-01', 'starts at January');
+equal(year[11], '2026-12', 'ends at December');
+check(year.every(k => k.startsWith('2026-')), 'and they all belong to that year');
 
 console.log('');
 if (failures > 0) {

@@ -158,6 +158,54 @@ function pad(n: number): string {
   return String(n).padStart(2, '0');
 }
 
+/**
+ * Every day in a month, as day keys, oldest first.
+ *
+ * Day 0 of the next month is the last day of this one, so February and leap
+ * years take care of themselves rather than needing a table of month lengths.
+ */
+export function daysInMonth(month_key: string): string[] {
+  const [year, month] = month_key.split('-').map(Number);
+  const last = new Date(year, month, 0).getDate();
+
+  const out: string[] = [];
+  for (let d = 1; d <= last; d++) {
+    out.push(`${month_key}-${pad(d)}`);
+  }
+  return out;
+}
+
+/** '2026-01-14' -> 14. The number the owner sees in their book. */
+export function dayNumber(day_key: string): number {
+  return Number(day_key.slice(8, 10));
+}
+
+/** '2026-01-14' -> 'Wed'. Helps an owner find their place against a paper book. */
+export function weekdayLabel(day_key: string, locale?: string): string {
+  const [y, m, d] = day_key.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(locale, { weekday: 'short' });
+}
+
+/** Sunday-or-Saturday, for greying out the days a shop may not have opened. */
+export function isWeekend(day_key: string): boolean {
+  const [y, m, d] = day_key.split('-').map(Number);
+  const day = new Date(y, m - 1, d).getDay();
+  return day === 0 || day === 6;
+}
+
+/**
+ * Whether a day has already happened. A backfill screen must not invite the
+ * owner to record takings for next Tuesday.
+ */
+export function isFuture(day_key: string, now: number = Date.now()): boolean {
+  return day_key > dayKey(now);
+}
+
+/** The twelve months of a year, oldest first. */
+export function monthsOfYear(year: number): string[] {
+  return monthsBetween(`${year}-01`, `${year}-12`);
+}
+
 // ============================================
 // ONE MONTH
 // ============================================

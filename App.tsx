@@ -86,8 +86,6 @@ import { SalesScreen } from './src/ui/sales/SalesScreen';
 // ============================================
 
 /**
- * Opened once in init() below, via openDatabaseAsync.
- *
  * Do NOT switch this back to openDatabaseSync. On native it makes no
  * difference, but on web expo-sqlite runs SQLite in a worker, and the *sync*
  * API reaches it by spinning on Atomics.load over a SharedArrayBuffer until the
@@ -100,6 +98,52 @@ import { SalesScreen } from './src/ui/sales/SalesScreen';
  * database call on the async path is what makes the web build usable.
  */
 let db: SQLite.SQLiteDatabase;
+
+/**
+ * The database is opened exactly ONCE per JS context, and the promise is cached
+ * on globalThis.
+ *
+ * WHY THIS IS NOT JUST A MODULE VARIABLE
+ * --------------------------------------
+ * On web, SQLite lives in a worker holding an OPFS access handle, and that
+ * handle is EXCLUSIVE -- one holder at a time. Nothing here ever closes it,
+ * because the database should stay open for the life of the app.
+ *
+ * So a second open, while the first handle is still held, fails with
+ * SQLITE_CANTOPEN ("Error code 14: unable to open database file"), and the app
+ * shows "Can't open your shop data" until the browser's storage is cleared.
+ *
+ * Opening used to happen inside a useEffect against a plain module variable,
+ * which meant a second open every time the component remounted -- which is what
+ * a Metro fast-refresh does after any code change. That is exactly the bug:
+ * edit a file, and the app could no longer open its own database.
+ *
+ * globalThis rather than a module-level variable, because fast-refresh
+ * re-evaluates the module and would reset a module variable while the worker
+ * from the previous evaluation is still very much alive, still holding the file.
+ * globalThis survives that.
+ *
+ * A failed open is NOT cached: the rejection clears the slot so a retry can
+ * genuinely try again rather than replay the same error forever.
+ */
+const DB_SLOT = '__shoptrack_db__';
+
+type DbGlobal = typeof globalThis & {
+  [DB_SLOT]?: Promise<SQLite.SQLiteDatabase>;
+};
+
+function openDatabase(): Promise<SQLite.SQLiteDatabase> {
+  const g = globalThis as DbGlobal;
+
+  if (!g[DB_SLOT]) {
+    g[DB_SLOT] = SQLite.openDatabaseAsync('shoptrack.db').catch(error => {
+      delete g[DB_SLOT];
+      throw error;
+    });
+  }
+
+  return g[DB_SLOT];
+}
 
 // ============================================
 // TYPES
@@ -177,7 +221,8 @@ const STRINGS = {
     ERROR_BACKUP: "Could not create backup",
     ERROR_RESTORE: "Could not restore backup",
     DB_ERROR_TITLE: "Can't open your shop data",
-    DB_ERROR_HINT: "Your data is still on this phone — ShopTrack just couldn't read it. Close the app and open it again. If it keeps happening, don't add anything new until it's fixed.",
+    DB_ERROR_HINT: "Your data is still on this phone — ShopTrack just couldn't read it. Try again, or close the app and open it fresh.",
+    DB_ERROR_RETRY: "Try again",
     
     // Confidence Signals (Tier 3.2)
     BASED_ON_COUNTS: (n: number) => `Based on ${n} count${n !== 1 ? 's' : ''}`,
@@ -307,7 +352,8 @@ const STRINGS = {
     SALES_TODAY: "Today's sales",
     SALES_BACKFILL: "Add a past month",
     SALES_TOOK_TODAY: "How much did you take today?",
-    SALES_TOOK_MONTH: (month: string) => `How much did you take in ${month}?`,
+    SALES_DAYS_FILLED: (filled: number, total: number) => `${filled} of ${total} days filled in`,
+    SALES_FILL_HINT: "Fill in the days you know. Leave the rest empty. Put 0 for a day you were closed.",
     SALES_MARGIN: "How much of that do you keep?",
     SALES_MARGIN_HINT: "Out of every R100 you take, how much is yours after paying for the stock? Most shops keep R20–R30.",
     SALES_MARGIN_IS_YOURS: "This is your own estimate, so the profit is an estimate too. Count your stock for the exact number.",
@@ -522,7 +568,8 @@ const STRINGS = {
     ERROR_BACKUP: "Ayikwazanga ukwenza ibhekhi",
     ERROR_RESTORE: "Ayikwazanga ukubuyisela ibhekhi",
     DB_ERROR_TITLE: "Ayikwazi ukuvula idatha yesitolo sakho",
-    DB_ERROR_HINT: "Idatha yakho isesekhona kule foni — i-ShopTrack ayikwazanga ukuyifunda. Vala uhlelo bese uyavula futhi. Uma kuqhubeka, ungangezi lutho olusha kuze kulungiswe.",
+    DB_ERROR_HINT: "Idatha yakho isesekhona kule foni — i-ShopTrack ayikwazanga ukuyifunda. Zama futhi, noma uvale uhlelo bese uyaluvula kabusha.",
+    DB_ERROR_RETRY: "Zama futhi",
     
     // Confidence Signals (Tier 3.2)
     BASED_ON_COUNTS: (n: number) => `Kusekelwe ekubalweni oku-${n}`,
@@ -651,7 +698,8 @@ const STRINGS = {
     SALES_TODAY: "Okuthengisiwe namuhla",
     SALES_BACKFILL: "Engeza inyanga edlule",
     SALES_TOOK_TODAY: "Utholé malini namuhla?",
-    SALES_TOOK_MONTH: (month: string) => `Utholé malini ngo-${month}?`,
+    SALES_DAYS_FILLED: (filled: number, total: number) => `Izinsuku ezingu-${filled} kwezingu-${total} ezigcwalisiwe`,
+    SALES_FILL_HINT: "Gcwalisa izinsuku ozaziyo. Shiya ezinye zingenalutho. Faka u-0 ngosuku obuvaliwe ngalo.",
     SALES_MARGIN: "Ugcina malini kulokho?",
     SALES_MARGIN_HINT: "Kuwo wonke u-R100 owutholayo, malini engeyakho ngemva kokukhokhela isitoko? Izitolo eziningi zigcina u-R20–R30.",
     SALES_MARGIN_IS_YOURS: "Lesi yisilinganiso sakho, ngakho inzuzo nayo iyisilinganiso. Bala isitoko sakho ukuze uthole inani eliqondile.",
@@ -868,36 +916,11 @@ export default function App() {
     ]).start();
   }, [lastProfit, profitFade, profitRise]);
 
-  // Initialize database and language on mount
-  useEffect(() => {
-    async function init() {
-      try {
-        // Load saved language
-        const savedLang = await AsyncStorage.getItem('shoptrack_language');
-        if (savedLang === 'zu' || savedLang === 'en') {
-          setLang(savedLang);
-        }
-        
-        db = await SQLite.openDatabaseAsync('shoptrack.db');
-        await initDatabase(db);
-        await refreshProducts();
-        await refreshCredit();
-        await refreshExpenses();
-        await refreshCashUp();
-        await refreshSales();
-      } catch (error) {
-        console.error('Database init error:', error);
-        // Kept verbatim: "Sync operation timeout" means someone reintroduced a
-        // sync SQLite call on web, and the exact wording is the fastest route
-        // back to the note above.
-        setDbError(error instanceof Error ? error.message : String(error));
-      } finally {
-        setLoading(false);
-      }
-    }
-    init();
-  }, []);
-
+  // Open the database and load everything Home needs.
+  //
+  // Also the retry: openDatabase() drops its cached promise when an open fails,
+  // so calling this again is a real second attempt rather than a replay of the
+  // same error.
   // Toggle language
   const toggleLanguage = async () => {
     const newLang = lang === 'en' ? 'zu' : 'en';
@@ -962,6 +985,41 @@ export default function App() {
       calculateRestockPriority(result),
       refreshLatestProfit(result),
     ]);
+  }, []);
+
+  const init = useCallback(async () => {
+    setLoading(true);
+    setDbError(null);
+    try {
+      // Load saved language
+      const savedLang = await AsyncStorage.getItem('shoptrack_language');
+      if (savedLang === 'zu' || savedLang === 'en') {
+        setLang(savedLang);
+      }
+
+      db = await openDatabase();
+      await initDatabase(db);
+      await refreshProducts();
+      await refreshCredit();
+      await refreshExpenses();
+      await refreshCashUp();
+      await refreshSales();
+    } catch (error) {
+      console.error('Database init error:', error);
+      // Kept verbatim. The exact wording is the fastest route back to the notes
+      // above: "Sync operation timeout" means a sync SQLite call came back on
+      // web; "code 14: unable to open database file" means something opened the
+      // database twice.
+      setDbError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  }, [refreshProducts, refreshCredit, refreshExpenses, refreshCashUp, refreshSales]);
+
+  useEffect(() => {
+    init();
+    // Deliberately once per mount, not on every init identity change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const refreshLatestProfit = async (productList: Product[]) => {
@@ -1184,6 +1242,20 @@ export default function App() {
           <Text style={styles.dbErrorIcon}>⚠️</Text>
           <Text style={styles.dbErrorTitle}>{strings.DB_ERROR_TITLE}</Text>
           <Text style={styles.dbErrorHint}>{strings.DB_ERROR_HINT}</Text>
+
+          {/* Without this the only way out was clearing browser storage, which
+              on a real phone means deleting the shop's books to fix a lock. */}
+          <Pressable
+            style={({ pressed }) => [
+              styles.dbErrorRetry,
+              pressed && styles.dbErrorRetryPressed,
+            ]}
+            android_ripple={{ color: color.ripple }}
+            onPress={init}
+          >
+            <Text style={styles.dbErrorRetryText}>{strings.DB_ERROR_RETRY}</Text>
+          </Pressable>
+
           <Text style={styles.dbErrorDetail}>{dbError}</Text>
         </View>
       </SafeAreaView>

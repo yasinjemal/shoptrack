@@ -42,18 +42,34 @@ test. There is deliberately no reset flag and no drop-all fallback anymore.
 | | |
 |---|---|
 | **Where** | `src/core/db.ts` — `BACKUP_FORMAT_VERSION`, `createBackup`, `restoreBackup` |
-| **Now** | Format v1 is independent from schema v5 and the old three-table format has an upgrader |
-| **Test** | All seven tables round-trip; an invalid restore rolls back without replacing current data |
+| **Now** | Format v2 is independent from the schema version; formats v1 and the old three-table file have upgraders |
+| **Test** | All eight tables round-trip; an invalid restore rolls back without replacing current data |
 | **If ignored** | Every backup a shop has made becomes unrestorable the first time you change the schema |
 
 ### Current behaviour
 
 `backup_format_version` changes only when the JSON contract changes;
 `schema_version` is informational. A backup contains products, stock movements,
-count sessions, customers, credit entries, expenses, and cash-ups. Restore
-validates before writing, replaces all seven sets transactionally, and rolls
-back to the existing shop if any row is invalid. The old pre-pilot three-table
-version-5 file is upgraded to format v1 with explicit empty newer tables.
+count sessions, customers, credit entries, expenses, cash-ups, and sales
+entries. Restore validates before writing, replaces all eight sets
+transactionally, and rolls back to the existing shop if any row is invalid.
+Format-1 files (made before the sales book existed) and the old pre-pilot
+three-table version-5 file are upgraded on import with explicit empty newer
+tables.
+
+### The tripwire fired once — the sales book was missing from backups
+
+When the sales book landed (schema v6, `sales_entries`), the backup stayed at
+format v1 and never learned about the new table. A shop that filled in months
+of takings and then restored a backup would silently lose the whole sales book
+— and a restore left any existing sales entries mixed in with the restored
+shop, because the delete block did not clear the table either. Found in a
+pre-pilot review, July 2026; fixed by format v2.
+
+The lesson, added to the schema-bump checklist: **every new table needs three
+entries, not two** — the schema migration, the backup format bump with an
+upgrader, and the round-trip test. The migration alone only protects data on
+the phone it is already on.
 
 ---
 
@@ -139,6 +155,38 @@ first-count language, Undo, state-driven Home, scrollable Weekly Summary,
 searchable Stock-In, and bilingual core copy), and both web and Android bundles
 are compiled before a pilot build. That catches wiring and bundling regressions;
 the real-phone tap-through remains the final proof.
+
+---
+
+## Never open the database twice
+
+Not a pre-pilot item — a permanent rule, and the second web-only trap in a row.
+
+**Symptom:** "Can't open your shop data — Error code 14: unable to open database
+file". Clearing browser storage fixes it, until the next code change.
+
+**Cause:** on web, SQLite lives in a worker holding an OPFS access handle, and
+that handle is **exclusive** — one holder at a time. Nothing closes it, because
+the database should stay open for the life of the app. So a second open, while
+the first handle is still held, fails with `SQLITE_CANTOPEN` (14).
+
+Opening used to happen inside a `useEffect` against a plain module variable.
+Every remount opened the database again — and **a Metro fast-refresh is a
+remount**. So editing any file could leave the app unable to open its own data.
+
+**The trap, again:** native does not care. Two opens on Android are fine. This
+only ever breaks on web, so it survives every device test.
+
+**Rule:** the database is opened once per JS context via `openDatabase()` in
+App.tsx, which caches the promise on `globalThis` — not in a module variable,
+because fast-refresh re-evaluates the module while the previous worker is still
+alive and still holding the file. A failed open is not cached, so "Try again" is
+a real retry. `npm run test:ui-flow` asserts all three and fails if a second
+open appears.
+
+**Related:** the same shape as the sync-SQLite rule below. Both are web-only,
+both are invisible on a device, both shipped. If a third one turns up, the
+lesson is that the web build needs a smoke test in CI, not another rule here.
 
 ---
 

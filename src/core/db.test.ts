@@ -45,8 +45,10 @@ import {
   recordStockIn,
   restoreBackup,
   saveCountSession,
+  clearMonthDays,
   clearMonthSummary,
   deleteSalesEntry,
+  recordSalesDays,
   loadSalesEntries,
   stockPurchaseTotal,
   toCoreProduct,
@@ -58,7 +60,7 @@ import { calculateCreditSummary } from './credit';
 import { calculatePeriodSummary } from './calculations';
 import { calculateExpenseSummary, calculateNetProfit } from './expenses';
 import { calculateExpectedCash, cashTurnover, reconcile } from './cashup';
-import { calculateSalesHistory } from './sales';
+import { calculateMonth, calculateSalesHistory, monthOf } from './sales';
 
 let failures = 0;
 
@@ -543,9 +545,11 @@ async function run() {
     { takenOut: 50 },
     MONDAY + DAY
   );
+  await recordSales(backupSource, 'MONTH', '2026-01', 48000, 25, 'from the book', MONDAY + DAY);
+  await recordSales(backupSource, 'DAY', '2026-07-01', 1400, 25, null, MONDAY + DAY);
 
   const backup = await createBackup(backupSource);
-  equal(backup.backup_format_version, 1, 'backup format is independent from schema version');
+  equal(backup.backup_format_version, 2, 'backup format is independent from schema version');
   check(backup.data.products.length > 0, 'backup includes products');
   check(backup.data.stock_movements.length > 0, 'backup includes stock movements');
   check(backup.data.count_sessions.length > 0, 'backup includes count sessions');
@@ -553,8 +557,12 @@ async function run() {
   check(backup.data.credit_entries.length > 0, 'backup includes credit entries');
   check(backup.data.expenses.length > 0, 'backup includes expenses');
   check(backup.data.cash_ups.length > 0, 'backup includes cash-ups');
+  equal(backup.data.sales_entries.length, 2, 'backup includes the sales book');
 
   const { db: backupTarget } = await freshDb();
+  // A sales entry the backup does not know about: restore must replace it,
+  // not leave it mixed in with the restored book.
+  await recordSales(backupTarget, 'MONTH', '2020-01', 999, 10, 'stale', MONDAY);
   await restoreBackup(backupTarget, backup);
   equal((await loadProducts(backupTarget))[0].name, 'Bread', 'restored product round-trips');
   equal((await loadMovements(backupTarget)).length, backup.data.stock_movements.length, 'all movements restore');
@@ -562,6 +570,11 @@ async function run() {
   equal((await loadCreditEntries(backupTarget))[0].amount, 35, 'credit ledger restores');
   equal((await loadExpenses(backupTarget))[0].amount, 40, 'expenses restore');
   equal((await loadCashUps(backupTarget))[0].counted_amount, 200, 'cash-ups restore');
+  const restoredSales = await loadSalesEntries(backupTarget);
+  equal(restoredSales.length, 2, 'sales book restores');
+  check(!restoredSales.some(e => e.notes === 'stale'), 'restore clears sales entries missing from the backup');
+  equal(restoredSales.find(e => e.period_key === '2026-01')!.amount, 48000, 'sales amounts round-trip');
+  equal(restoredSales.find(e => e.period_key === '2026-01')!.margin_pct, 25, 'sales margins round-trip');
 
   const brokenBackup = structuredClone(backup);
   brokenBackup.data.expenses[0].category = 'STOCK';
@@ -575,6 +588,40 @@ async function run() {
   equal((await loadProducts(backupTarget))[0].name, 'Bread', 'failed restore keeps existing data');
   equal((await loadExpenses(backupTarget))[0].category, 'TRANSPORT', 'failed restore rolls back every table');
 
+  const brokenSalesBackup = structuredClone(backup);
+  brokenSalesBackup.data.sales_entries[0].period = 'WEEK';
+  let salesRestoreRolledBack = false;
+  try {
+    await restoreBackup(backupTarget, brokenSalesBackup);
+  } catch {
+    salesRestoreRolledBack = true;
+  }
+  check(salesRestoreRolledBack, 'an invalid sales entry rejects the whole restore');
+  equal((await loadSalesEntries(backupTarget)).length, 2, 'failed restore keeps the existing sales book');
+
+  // A format-1 backup (made before the sales book existed) still restores;
+  // the sales book it never knew about becomes an explicit empty set.
+  const v1 = normaliseBackup({
+    shoptrack_backup: true,
+    backup_format_version: 1,
+    schema_version: 5,
+    created_at: backup.created_at,
+    data: {
+      products: backup.data.products,
+      stock_movements: backup.data.stock_movements,
+      count_sessions: backup.data.count_sessions,
+      customers: backup.data.customers,
+      credit_entries: backup.data.credit_entries,
+      expenses: backup.data.expenses,
+      cash_ups: backup.data.cash_ups,
+    },
+  });
+  equal(v1.backup_format_version, 2, 'format-1 backup is upgraded');
+  equal(v1.data.sales_entries.length, 0, 'format-1 backup gets an explicit empty sales book');
+  await restoreBackup(backupTarget, v1);
+  equal((await loadSalesEntries(backupTarget)).length, 0, 'restoring a format-1 backup replaces the sales book too');
+  equal((await loadCustomers(backupTarget))[0].name, 'Lerato', 'format-1 restore keeps its seven tables');
+
   const legacy = normaliseBackup({
     shoptrack_backup: true,
     version: 5,
@@ -585,8 +632,9 @@ async function run() {
       count_sessions: backup.data.count_sessions,
     },
   });
-  equal(legacy.backup_format_version, 1, 'legacy pre-pilot backup is upgraded');
+  equal(legacy.backup_format_version, 2, 'legacy pre-pilot backup is upgraded');
   equal(legacy.data.customers.length, 0, 'missing legacy tables become explicit empty sets');
+  equal(legacy.data.sales_entries.length, 0, 'legacy backups get an explicit empty sales book');
 
   console.log('');
   console.log('========================================');
@@ -667,6 +715,75 @@ async function run() {
     (await loadSalesEntries(salesDb)).find(e => e.period_key === '2026-07-11')!.amount,
     0,
     'a day the shop was closed records as zero, not as an error'
+  );
+
+  console.log('');
+  console.log('========================================');
+  console.log('TEST: filling a month from the calendar');
+  console.log('========================================');
+
+  const { db: calDb } = await freshDb();
+
+  // The owner opens January and types down their book. Days they left blank are
+  // simply not passed in.
+  await recordSalesDays(calDb, '2026-01', [
+    { dayKey: '2026-01-01', amount: 0 },      // closed for New Year
+    { dayKey: '2026-01-02', amount: 1400 },
+    { dayKey: '2026-01-03', amount: 1600 },
+  ], 25, MONDAY);
+
+  const janEntries = await loadSalesEntries(calDb);
+  equal(janEntries.length, 3, 'only the days that were filled in are stored');
+  equal(janEntries.every(e => e.period === 'DAY'), true, 'they are stored as days');
+  equal(janEntries.find(e => e.period_key === '2026-01-01')!.amount, 0, 'a closed day is kept as zero');
+
+  const janMonth = calculateMonth('2026-01', janEntries);
+  equal(janMonth.sales, 3000, 'the month adds up its days');
+  equal(janMonth.profit, 750, 'and earns at the margin given');
+  equal(janMonth.days_recorded, 3, 'and knows how many days it has');
+
+  // Re-opening January and correcting a day must not duplicate it.
+  await recordSalesDays(calDb, '2026-01', [
+    { dayKey: '2026-01-02', amount: 1500 },
+  ], 25, MONDAY + DAY);
+  const corrected2 = await loadSalesEntries(calDb);
+  equal(corrected2.length, 3, 'saving again does not duplicate days');
+  equal(
+    corrected2.find(e => e.period_key === '2026-01-02')!.amount,
+    1500,
+    'the corrected day replaces the old one'
+  );
+  equal(
+    corrected2.find(e => e.period_key === '2026-01-03')!.amount,
+    1600,
+    'days not touched this time are left alone'
+  );
+
+  // Detailing a month must drop any whole-month total for it, or the two would
+  // describe the same trading.
+  await recordSales(calDb, 'MONTH', '2026-02', 40000, 25, null, MONDAY);
+  await recordSalesDays(calDb, '2026-02', [{ dayKey: '2026-02-01', amount: 900 }], 25, MONDAY);
+
+  const feb = calculateSalesHistory(await loadSalesEntries(calDb)).months
+    .find(m => m.month_key === '2026-02')!;
+  equal(feb.has_conflict, false, 'detailing a month clears its old total, so no clash');
+  equal(feb.sales, 900, 'only the day counts');
+  equal(feb.source, 'days', 'and the month reads as detailed');
+
+  // The reverse: going back to a single total drops the days.
+  await clearMonthDays(calDb, '2026-02');
+  await recordSales(calDb, 'MONTH', '2026-02', 40000, 25, null, MONDAY);
+  const febAgain = calculateSalesHistory(await loadSalesEntries(calDb)).months
+    .find(m => m.month_key === '2026-02')!;
+  equal(febAgain.source, 'month', 'clearing the days leaves the month total');
+  equal(febAgain.sales, 40000, 'and the total is what counts');
+  equal(febAgain.has_conflict, false, 'with no clash left behind');
+
+  // clearMonthDays must not reach into a neighbouring month via its LIKE.
+  equal(
+    (await loadSalesEntries(calDb)).filter(e => monthOf(e.period_key) === '2026-01').length,
+    3,
+    'clearing February left January alone'
   );
 
   console.log('');
