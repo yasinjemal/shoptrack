@@ -391,15 +391,20 @@ mistakes are corrected by adding the opposite entry, not by editing history.
   against a guess, and the gap is meaningless. The screen warns and lets the
   owner continue. If pilot shops routinely cash up without counting, the warning
   is not enough and the flow needs rethinking — watch for this.
-- **Cash-up assumes one till and one person.** There is no shift handover and no
-  way to attribute a gap. In a shop where a spouse or child also serves
-  customers, a shortfall cannot be traced to a person or a time. That is
-  probably the right scope for now, but it limits what the number can tell you.
-- **Currency is hard-coded to Rands.** `R` is baked into strings and engines.
-  Fine for South Africa; a real change if ShopTrack ever leaves it.
-- **No crash reporting.** If the app dies on a shop's phone during the pilot,
-  you will not know unless they tell you — and they will not tell you. Consider
-  adding something before Day 0, or plan to ask directly at each check-in.
+- **Cash-up assumes one till.** ~~And one person~~ — staff mode (July 2026) now
+  lets counts and cash-ups carry a `recorded_by` PIN attribution, so a
+  shortfall can point at a shift. Attribution is optional and advisory: the
+  PIN identifies, it does not secure. There is still exactly one till.
+- **~~Currency is hard-coded to Rands~~ — resolved July 2026.** Currency is a
+  settings-table entry (travels inside backups) formatted through
+  `src/core/currency.ts`; country packs cover ZAR/KES/NGN/ETB. The default
+  remains Rand, and every pre-existing shop stays a Rand shop.
+- **~~No crash reporting~~ — largely resolved July 2026.** A zero-network crash
+  log (`src/app/dataSafety.ts`) records the last crash into the settings table,
+  so it travels inside every backup and surfaces at the next check-in. Remote
+  reporting via Sentry is wired (`src/app/telemetry.ts`, PII-scrubbed through
+  `src/core/privacy.ts`) but stays a no-op until the owner supplies
+  `EXPO_PUBLIC_SENTRY_DSN` — that account is an owner task.
 - **Adding an expense category is a schema change.** The category list is a
   `CHECK` constraint, so a new one needs a migration.
 - **Pilot build identity:** `app.json` and `package.json` are bumped for each

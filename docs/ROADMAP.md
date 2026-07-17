@@ -10,6 +10,42 @@ features; never cap, paywall, or endanger anything an owner already has.
 
 ---
 
+## Status — July 2026 build-out
+
+Everything below that is achievable in code has been **built and is covered by
+the test suite** (`npm test`, `npm run typecheck`, web bundle export all
+green): i18n across en/zu/xh/st/af/sw/am with compile-time completeness,
+settings-backed currency (ZAR/KES/NGN/ETB) and country packs, schema v9
+(settings, mobile-money recording, staff attribution) with additive tested
+migrations, backup format v2 covering every table, daily auto-backup with
+7-file rotation, local crash log that travels inside backups, WhatsApp message
+builders (credit reminders, receipts, reorder sheets), read-aloud statements,
+voice number entry, barcode product finder, business-health report, activation
+metric, encrypted cloud-backup client (recovery phrase, client-side
+encryption), partner attribution, entitlement policy (nothing free ever
+becomes paid), Ethiopian calendar support, and Sentry telemetry behind a
+privacy scrubber.
+
+**What remains needs the owner, not code:**
+
+1. **Run the pilot** (docs/PILOT-TRACKER.md): 3–5 shops, 14 days — nothing
+   else on this page matters until 2+ shops keep counting.
+2. **Real-Android rehearsal** (BEFORE-PILOT Tripwire 3): migration + backup +
+   restore on a physical phone, then tag and cut `pilot-1.0`.
+3. **Tap-through on a phone**: engines are tested, screens are not rendered in
+   CI; "done = tapped through" still stands for every new screen.
+4. **Sentry account**: set `EXPO_PUBLIC_SENTRY_DSN` (and org/project in
+   app config) to activate remote crash reporting.
+5. **Cloud-backup bucket**: stand up dumb object storage and pass its URL to
+   `HttpCloudBackupStore` — the client, encryption, and recovery phrase are
+   done.
+6. **Native-speaker review** of the xh / st / af / sw / am string files —
+   they compile (full key coverage) but are machine-drafted.
+7. **EAS builds + release train** (docs/RELEASE-TRAIN.md) and, post-pilot,
+   distribution-partner conversations (Flash, Kazang, telco agent networks).
+
+---
+
 ## What the research says
 
 The graveyard of apps that tried this is instructive. The winners' pattern is
