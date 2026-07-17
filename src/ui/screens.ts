@@ -1,6 +1,6 @@
 /**
  * The app's screens. Navigation is deliberately a hand-rolled state machine
- * in App.tsx -- twelve screens, no parameters, one action per screen. A
+ * in App.tsx -- a handful of screens, no parameters, one action per screen. A
  * navigation library would add weight without adding a capability this app
  * uses. See docs/ROADMAP.md ("What we will NOT build").
  */
@@ -17,5 +17,10 @@ export type Screen =
   | 'expenses'
   | 'cashup'
   | 'sales'
+  // Worker path while the owner lock is on: today's takings only, no history.
+  | 'sales_today'
   | 'settings'
-  | 'health';
+  | 'health'
+  // The PIN ask reached from the locked Home card; gated screens render the
+  // gate in place instead.
+  | 'owner_unlock';

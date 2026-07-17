@@ -12,6 +12,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import {
+  AppState,
   Text,
   View,
   TouchableOpacity,
@@ -60,9 +61,24 @@ import {
   setCurrentCurrency,
   type CurrencyCode,
 } from '../core/currency';
+import {
+  backupFilenameSlug,
+  setCurrentShopProfile,
+  SHOP_NAME_SETTING_KEY,
+  SHOP_PHONE_SETTING_KEY,
+  type ShopProfile,
+} from '../core/shopProfile';
+import {
+  isOwnerLocked,
+  lockOwner,
+  OWNER_PIN_SETTING_KEY,
+  setStoredOwnerPin,
+  unlockOwner,
+} from '../core/ownerLock';
+import { OwnerGateScreen } from '../ui/owner/OwnerGateScreen';
 import { styles } from '../ui/styles';
 import { color } from '../ui/theme';
-import { getStrings, isReviewedLanguage, type Language } from '../i18n';
+import { getStrings, isLanguage, type Language } from '../i18n';
 import type { Screen } from '../ui/screens';
 import { HomeScreen, type RestockItem } from '../ui/home/HomeScreen';
 import { ProductsListScreen } from '../ui/products/ProductsListScreen';
@@ -204,7 +220,52 @@ export default function App() {
   // money label and country-specific payment label after a settings change.
   const [currencyCode, setCurrencyCode] = useState<CurrencyCode>('ZAR');
   const [countryPackCode, setCountryPackCode] = useState<CountryPackCode>('ZA');
+  const [shopName, setShopName] = useState<string | null>(null);
+  // React copy of the module lock state (ownerLock.ts), so gating re-renders.
+  const [ownerLocked, setOwnerLocked] = useState(false);
   const strings = t(lang);
+
+  // Re-lock whenever the app leaves the foreground: handing the phone to the
+  // worker mid-session must hand over nothing.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', state => {
+      if (state !== 'active') {
+        lockOwner();
+        setOwnerLocked(isOwnerLocked());
+      }
+    });
+    return () => subscription.remove();
+  }, []);
+
+  // Load the stored profile into the module (for the share renderer) and the
+  // React copy (for the home header). Runs at init and after every restore --
+  // a restored shop must come back knowing its own name.
+  const applyStoredShopProfile = async () => {
+    const profile = setCurrentShopProfile({
+      shop_name: await getSetting(db, SHOP_NAME_SETTING_KEY),
+      shop_phone: await getSetting(db, SHOP_PHONE_SETTING_KEY),
+    });
+    setShopName(profile.shop_name);
+    // The owner PIN travels in backups too; loading always re-locks.
+    setStoredOwnerPin(await getSetting(db, OWNER_PIN_SETTING_KEY));
+    setOwnerLocked(isOwnerLocked());
+  };
+
+  const changeOwnerPin = async (pin: string | null) => {
+    await setSetting(db, OWNER_PIN_SETTING_KEY, pin ?? '');
+    setStoredOwnerPin(pin);
+    // Setting or changing a PIN re-locks (module behavior); the owner just
+    // proved they know the new PIN, so let them keep working unlocked.
+    if (pin != null) unlockOwner(pin);
+    setOwnerLocked(isOwnerLocked());
+  };
+
+  const changeShopProfile = async (profile: ShopProfile) => {
+    const clean = setCurrentShopProfile(profile);
+    setShopName(clean.shop_name);
+    await setSetting(db, SHOP_NAME_SETTING_KEY, clean.shop_name ?? '');
+    await setSetting(db, SHOP_PHONE_SETTING_KEY, clean.shop_phone ?? '');
+  };
 
   const changeLanguage = async (newLang: Language) => {
     setLang(newLang);
@@ -292,9 +353,11 @@ export default function App() {
     setLoading(true);
     setDbError(null);
     try {
-      // Load saved language
+      // Load saved language. Any known language loads, reviewed or not --
+      // the owner reviews draft translations inside the app, and a draft
+      // that resets to English on every restart cannot be reviewed.
       const savedLang = await AsyncStorage.getItem('shoptrack_language');
-      if (isReviewedLanguage(savedLang)) {
+      if (isLanguage(savedLang)) {
         setLang(savedLang);
       }
 
@@ -308,6 +371,7 @@ export default function App() {
         (await getSetting(db, CURRENCY_SETTING_KEY)) ?? country.currency
       );
       setCurrencyCode(currency.code as CurrencyCode);
+      await applyStoredShopProfile();
       setSharedBackupDue(isSharedBackupDue(await lastSharedBackupAt(db)));
       try {
       await ensureDailyBackup(db);
@@ -460,9 +524,10 @@ export default function App() {
     try {
       const backup = await createBackup(db);
 
-      // Create filename with date
+      // Named after the shop so the file is findable in a WhatsApp chat full
+      // of backups: "nomsas-shop-backup-2026-07-18.json".
       const date = new Date().toISOString().split('T')[0];
-      const filename = `shoptrack-backup-${date}.json`;
+      const filename = `${backupFilenameSlug(shopName)}-backup-${date}.json`;
       const backupFile = new File(Paths.cache, filename);
 
       // Write to cache
@@ -528,6 +593,7 @@ export default function App() {
                   (await getSetting(db, CURRENCY_SETTING_KEY)) ?? country.currency
                 );
                 setCurrencyCode(currency.code as CurrencyCode);
+                await applyStoredShopProfile();
                 await Promise.all([
                   refreshProducts(),
                   refreshCredit(),
@@ -598,9 +664,36 @@ export default function App() {
   // THE SCREEN STATE MACHINE
   // ==========================================
 
+  // The owner gate stands in front of every money screen while locked:
+  // expenses, the sales book, weekly profit, activity (per-product profit),
+  // and the health report. The worker's screens -- count, stock-in, credit,
+  // cash-up, products, today's takings -- are never gated.
+  const gatedScreen =
+    screen === 'expenses' || screen === 'sales' || screen === 'weekly' ||
+    screen === 'activity' || screen === 'health' || screen === 'owner_unlock';
+  if (gatedScreen && ownerLocked) {
+    return (
+      <OwnerGateScreen
+        strings={strings}
+        onBack={() => setScreen('home')}
+        onUnlocked={() => {
+          setOwnerLocked(isOwnerLocked());
+          if (screen === 'owner_unlock') setScreen('home');
+        }}
+      />
+    );
+  }
+  // Unlocked (or lock disabled): this pseudo-screen has nothing to show.
+  if (screen === 'owner_unlock') {
+    setScreen('home');
+    return null;
+  }
+
   if (screen === 'home') {
     return (
       <HomeScreen
+        shopName={shopName}
+        ownerLocked={ownerLocked}
         products={products}
         lastProfit={lastProfit}
         credit={credit}
@@ -632,6 +725,8 @@ export default function App() {
         onLanguageChange={changeLanguage}
         onCurrencyChange={changeCurrency}
         onCountryPackChange={changeCountryPack}
+        onShopProfileChange={changeShopProfile}
+        onOwnerPinChange={changeOwnerPin}
         onDataRestored={async () => {
           const country = setCurrentCountryPack(await getSetting(db, COUNTRY_PACK_SETTING_KEY));
           setCountryPackCode(country.code);
@@ -639,6 +734,7 @@ export default function App() {
             (await getSetting(db, CURRENCY_SETTING_KEY)) ?? country.currency
           );
           setCurrencyCode(currency.code as CurrencyCode);
+          await applyStoredShopProfile();
           await Promise.all([
             refreshProducts(), refreshCredit(), refreshExpenses(), refreshCashUp(), refreshSales(),
           ]);
@@ -695,6 +791,19 @@ export default function App() {
       <SalesScreen
         db={db}
         strings={strings}
+        onBack={() => setScreen('home')}
+        onChanged={refreshSales}
+      />
+    );
+  }
+
+  // The worker's path while the owner lock is on: today's takings only.
+  if (screen === 'sales_today') {
+    return (
+      <SalesScreen
+        db={db}
+        strings={strings}
+        todayOnly
         onBack={() => setScreen('home')}
         onChanged={refreshSales}
       />

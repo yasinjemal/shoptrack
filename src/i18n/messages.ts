@@ -2,6 +2,7 @@ import { formatMoney } from '../core/currency';
 import type { ShareMessage } from '../core/messages';
 import type { PaymentMethod } from '../core/credit';
 import { paymentMethodLabel } from '../core/countryPacks';
+import { shopSignature } from '../core/shopProfile';
 
 export interface ShareStrings {
   SHARE_CREDIT_OVERDUE: (name: string, amount: string, days: number) => string;
@@ -10,11 +11,23 @@ export interface ShareStrings {
   SHARE_COUNT_SUMMARY: (units: number, profit: string, counts: number) => string;
   SHARE_CASHUP_VERDICT: (verdict: 'balanced' | 'short' | 'over') => string;
   SHARE_CASHUP_SUMMARY: (verdict: string, counted: string, expected: string, gap: string, digital: string) => string;
+  SHARE_SIGNOFF: (shop: string) => string;
   CREDIT_PAYMENT_METHOD_LABEL: (method: PaymentMethod) => string;
   FORMAT_WHEN: (ts: number) => string;
 }
 
+/**
+ * Every shared message is signed with the shop's name when one is set --
+ * read synchronously from the profile, exactly as formatMoney reads the
+ * currency. A shop that has not named itself sends the message unchanged.
+ */
 export function renderShareMessage(message: ShareMessage, strings: ShareStrings): string {
+  const body = renderShareBody(message, strings);
+  const signature = shopSignature();
+  return signature ? `${body}\n\n${strings.SHARE_SIGNOFF(signature)}` : body;
+}
+
+function renderShareBody(message: ShareMessage, strings: ShareStrings): string {
   switch (message.kind) {
     case 'credit_reminder':
       return message.days_overdue != null

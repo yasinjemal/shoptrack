@@ -5,6 +5,7 @@ import type { SQLiteDatabase } from 'expo-sqlite';
 
 import { calculateBusinessHealthReport, type BusinessHealthReport } from '../../core/healthReport';
 import { formatMoney } from '../../core/currency';
+import { shopSignature } from '../../core/shopProfile';
 import { loadCashUps, loadCreditEntries, loadProducts } from '../../core/db';
 import type { Strings } from '../../i18n';
 import { color, elevation, radius, space } from '../theme';
@@ -65,7 +66,14 @@ export function HealthReportScreen({
         {report && (
           <TouchableOpacity
             style={reportStyles.share}
-            onPress={() => Share.share({ message: `${strings.HEALTH_SHARE_HEADER}\n\n${lines.join('\n')}` })}
+            onPress={() => {
+              // A lender-facing report must say whose shop it describes.
+              const signature = shopSignature();
+              const header = signature
+                ? `${strings.HEALTH_SHARE_HEADER}\n${strings.SHARE_SIGNOFF(signature)}`
+                : strings.HEALTH_SHARE_HEADER;
+              void Share.share({ message: `${header}\n\n${lines.join('\n')}` });
+            }}
           >
             <Text style={reportStyles.shareText}>{strings.HEALTH_SHARE}</Text>
           </TouchableOpacity>

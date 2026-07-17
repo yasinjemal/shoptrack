@@ -34,7 +34,6 @@
       }
     },
     "plugins": [
-      "@sentry/react-native",
       "expo-secure-store",
       [
         "expo-speech-recognition",

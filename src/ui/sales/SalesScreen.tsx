@@ -91,15 +91,22 @@ export function SalesScreen({
   strings,
   onBack,
   onChanged,
+  todayOnly = false,
 }: {
   db: SQLiteDatabase;
   strings: SalesStrings;
   onBack: () => void;
   onChanged: () => void;
+  /**
+   * Worker mode, reached from Home while the owner lock is on: straight to
+   * today's takings, no history, no profit, and no margin question -- the
+   * margin is the owner's number, silently reused from the last entry.
+   */
+  todayOnly?: boolean;
 }) {
   const [history, setHistory] = useState<SalesHistory | null>(null);
   const [entries, setEntries] = useState<SalesEntry[]>([]);
-  const [mode, setMode] = useState<Mode>({ kind: 'list' });
+  const [mode, setMode] = useState<Mode>(todayOnly ? { kind: 'today' } : { kind: 'list' });
   const [loading, setLoading] = useState(true);
 
   const refresh = React.useCallback(async () => {
@@ -122,18 +129,23 @@ export function SalesScreen({
   const done = async () => {
     await refresh();
     onChanged();
-    setMode({ kind: 'list' });
+    if (todayOnly) onBack();
+    else setMode({ kind: 'list' });
   };
 
   const lastMargin = history?.months[0]?.margin_pct ?? null;
 
   if (mode.kind === 'today') {
+    // In worker mode, wait for the load so the entry silently reuses the
+    // owner's last margin instead of falling back to the default.
+    if (todayOnly && loading) return null;
     return (
       <EntryScreen
         db={db}
         strings={strings}
         lastMargin={lastMargin}
-        onCancel={() => setMode({ kind: 'list' })}
+        hideMargin={todayOnly}
+        onCancel={todayOnly ? onBack : () => setMode({ kind: 'list' })}
         onSaved={done}
       />
     );
@@ -287,12 +299,15 @@ function EntryScreen({
   lastMargin,
   onCancel,
   onSaved,
+  hideMargin = false,
 }: {
   db: SQLiteDatabase;
   strings: SalesStrings;
   lastMargin: number | null;
   onCancel: () => void;
   onSaved: () => void;
+  /** Worker mode: the margin (and the profit it implies) is the owner's business. */
+  hideMargin?: boolean;
 }) {
   const now = Date.now();
 
@@ -348,30 +363,34 @@ function EntryScreen({
           />
         </View>
 
-        <Text style={styles.inputLabel}>{strings.SALES_MARGIN}</Text>
-        <View style={styles.priceInputRow}>
-          <TextInput
-            style={styles.priceInput}
-            value={margin}
-            onChangeText={setMargin}
-            placeholder="25"
-            keyboardType="number-pad"
-          />
-          <Text style={styles.currencyPrefix}>%</Text>
-        </View>
-        <Text style={styles.inputHint}>
-          {strings.SALES_MARGIN_HINT(formatMoney(100, 0), formatMoney(20, 0), formatMoney(30, 0))}
-        </Text>
+        {!hideMargin && (
+          <>
+            <Text style={styles.inputLabel}>{strings.SALES_MARGIN}</Text>
+            <View style={styles.priceInputRow}>
+              <TextInput
+                style={styles.priceInput}
+                value={margin}
+                onChangeText={setMargin}
+                placeholder="25"
+                keyboardType="number-pad"
+              />
+              <Text style={styles.currencyPrefix}>%</Text>
+            </View>
+            <Text style={styles.inputHint}>
+              {strings.SALES_MARGIN_HINT(formatMoney(100, 0), formatMoney(20, 0), formatMoney(30, 0))}
+            </Text>
 
-        {takings > 0 && marginValid && (
-          <Text style={styles.costSummary}>
-            {strings.SALES_WILL_KEEP(formatMoney(keeps))}
-          </Text>
+            {takings > 0 && marginValid && (
+              <Text style={styles.costSummary}>
+                {strings.SALES_WILL_KEEP(formatMoney(keeps))}
+              </Text>
+            )}
+
+            {/* The margin is the owner's guess, so the answer is their guess too.
+                Saying so is the difference between a tool and a fortune teller. */}
+            <Text style={ss.marginNote}>{strings.SALES_MARGIN_IS_YOURS}</Text>
+          </>
         )}
-
-        {/* The margin is the owner's guess, so the answer is their guess too.
-            Saying so is the difference between a tool and a fortune teller. */}
-        <Text style={ss.marginNote}>{strings.SALES_MARGIN_IS_YOURS}</Text>
 
         <Pressable
           style={({ pressed }) => [

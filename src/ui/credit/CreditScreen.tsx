@@ -110,6 +110,7 @@ export interface CreditStrings {
   SHARE_COUNT_SUMMARY: (units: number, profit: string, counts: number) => string;
   SHARE_CASHUP_VERDICT: (verdict: 'balanced' | 'short' | 'over') => string;
   SHARE_CASHUP_SUMMARY: (verdict: string, counted: string, expected: string, gap: string, digital: string) => string;
+  SHARE_SIGNOFF: (shop: string) => string;
   FORMAT_WHEN: (ts: number) => string;
   READ_ALOUD: string;
   STOP_READING: string;

@@ -13,14 +13,21 @@ import { st } from './st';
 import { af } from './af';
 import { sw } from './sw';
 import { am } from './am';
+import { om } from './om';
 
 /** The canonical shape of a language file. */
 export type Strings = typeof en;
 
-export type Language = 'en' | 'zu' | 'xh' | 'st' | 'af' | 'sw' | 'am';
+export type Language = 'en' | 'zu' | 'xh' | 'st' | 'af' | 'sw' | 'am' | 'om';
 
-export const STRINGS: Record<Language, Strings> = { en, zu, xh, st, af, sw, am };
+export const STRINGS: Record<Language, Strings> = { en, zu, xh, st, af, sw, am, om };
 
+/**
+ * `reviewed: false` marks a draft awaiting native-speaker sign-off. Drafts
+ * ARE selectable -- the owner reviews them inside the app, on the phone,
+ * which is the only place a translation can actually be judged. The
+ * "review pending" note in Settings is the honesty label, not a gate.
+ */
 export const LANGUAGE_OPTIONS: ReadonlyArray<{
   code: Language;
   label: string;
@@ -33,6 +40,7 @@ export const LANGUAGE_OPTIONS: ReadonlyArray<{
   { code: 'af', label: 'Afrikaans', reviewed: false },
   { code: 'sw', label: 'Kiswahili', reviewed: false },
   { code: 'am', label: 'አማርኛ', reviewed: false },
+  { code: 'om', label: 'Afaan Oromoo', reviewed: false },
 ];
 
 export function isLanguage(value: string | null): value is Language {

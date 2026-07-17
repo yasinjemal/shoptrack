@@ -24,6 +24,7 @@ import { StatusBar } from 'expo-status-bar';
 
 import { CASH_TOLERANCE } from '../../core/cashup';
 import { formatMoney } from '../../core/currency';
+import { shopSignature } from '../../core/shopProfile';
 import { summariseOutstanding, type CreditSummary } from '../../core/credit';
 import { summariseSalesBook, type SalesHistory } from '../../core/sales';
 import type { AppProduct, CashUp } from '../../core/db';
@@ -41,6 +42,8 @@ export interface RestockItem {
 }
 
 export function HomeScreen({
+  shopName,
+  ownerLocked,
   products,
   lastProfit,
   credit,
@@ -57,6 +60,9 @@ export function HomeScreen({
   onBackup,
   onRestore,
 }: {
+  shopName: string | null;
+  /** Owner lock on and not unlocked: money cards hide, sales tile becomes today-only. */
+  ownerLocked: boolean;
   products: AppProduct[];
   lastProfit: number | null;
   credit: CreditSummary | null;
@@ -100,10 +106,10 @@ export function HomeScreen({
     <SafeAreaView style={styles.container}>
       <StatusBar style="light" />
 
-      {/* Header */}
+      {/* Header: the shop's own name once it has one; the app name until then. */}
       <View style={styles.homeHeader}>
-        <Text style={styles.appName}>ShopTrack</Text>
-        <Text style={styles.tagline}>{strings.APP_TAGLINE}</Text>
+        <Text style={styles.appName}>{shopName ?? 'ShopTrack'}</Text>
+        <Text style={styles.tagline}>{shopName ? strings.APP_TAGLINE_NAMED : strings.APP_TAGLINE}</Text>
       </View>
 
       <ScrollView style={styles.homeContent}>
@@ -138,7 +144,20 @@ export function HomeScreen({
             opened ShopTrack for, so it arrives rather than just being there.
             Nothing else animates -- a screen where everything moves has no
             emphasis left to give. */}
-        {lastProfit !== null && (
+        {/* The owner lock replaces every money card with one honest card.
+            The tap is the owner's way back in; the worker just sees a lock. */}
+        {ownerLocked && (
+          <Pressable
+            style={({ pressed }) => [styles.salesCard, pressed && styles.salesCardPressed]}
+            android_ripple={{ color: color.ripple }}
+            onPress={() => setScreen('owner_unlock')}
+          >
+            <Text style={styles.salesCardLabel}>{strings.OWNER_LOCKED_CARD}</Text>
+            <Text style={styles.salesCardHint}>{strings.OWNER_LOCKED_CARD_HINT}</Text>
+          </Pressable>
+        )}
+
+        {!ownerLocked && lastProfit !== null && (
           <Animated.View
             style={[
               styles.profitCard,
@@ -213,7 +232,7 @@ export function HomeScreen({
         {/* The owner's own book. Shown next to counted profit, never added to
             it: both answer "did I make money?", so summing them counts the
             same trading twice. See src/core/sales.ts. */}
-        {sales && summariseSalesBook(sales) && (
+        {!ownerLocked && sales && summariseSalesBook(sales) && (
           <Pressable
             style={({ pressed }) => [styles.salesCard, pressed && styles.salesCardPressed]}
             android_ripple={{ color: color.ripple }}
@@ -231,7 +250,7 @@ export function HomeScreen({
         )}
 
         {/* Credit book: what's out in the community */}
-        {credit && summariseOutstanding(credit) && (
+        {!ownerLocked && credit && summariseOutstanding(credit) && (
           <TouchableOpacity
             style={styles.creditCard}
             onPress={() => setScreen('credit')}
@@ -272,7 +291,10 @@ export function HomeScreen({
                 const lines = calculateReorderItems(products).map(item =>
                   strings.REORDER_LINE(item.name, item.current_qty, item.suggested_qty, item.unit_label)
                 );
-                void Share.share({ message: `${strings.REORDER_HEADER}\n\n${lines.join('\n')}` });
+                // The supplier needs to know WHICH shop is ordering.
+                const signature = shopSignature();
+                const signoff = signature ? `\n\n${strings.SHARE_SIGNOFF(signature)}` : '';
+                void Share.share({ message: `${strings.REORDER_HEADER}\n\n${lines.join('\n')}${signoff}` });
               }}
             >
               <Text style={styles.dataButtonText}>{strings.REORDER_SHARE}</Text>
@@ -370,13 +392,17 @@ export function HomeScreen({
               <Text style={styles.secondaryActionHint}>{strings.CASHUP_HOME_HINT}</Text>
             </Pressable>
 
+            {/* Locked: the worker still writes down today's takings, but the
+                book itself (history, profit) stays the owner's. */}
             <Pressable
               style={({ pressed }) => [styles.secondaryAction, pressed && styles.secondaryActionPressed]}
               android_ripple={{ color: color.ripple, borderless: false }}
-              onPress={() => setScreen('sales')}
+              onPress={() => setScreen(ownerLocked ? 'sales_today' : 'sales')}
             >
               <Text style={styles.secondaryActionIcon}>📗</Text>
-              <Text style={styles.secondaryActionText}>{strings.SALES_HOME_BUTTON}</Text>
+              <Text style={styles.secondaryActionText}>
+                {ownerLocked ? strings.SALES_TODAY : strings.SALES_HOME_BUTTON}
+              </Text>
               <Text style={styles.secondaryActionHint}>{strings.SALES_HOME_HINT}</Text>
             </Pressable>
 

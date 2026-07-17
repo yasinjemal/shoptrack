@@ -24,6 +24,13 @@ import {
   setSetting,
   type StaffMember,
 } from '../../core/db';
+import {
+  SHOP_NAME_SETTING_KEY,
+  SHOP_PHONE_SETTING_KEY,
+  SHOP_TEXT_MAX_LENGTH,
+  type ShopProfile,
+} from '../../core/shopProfile';
+import { isOwnerLockEnabled, isValidOwnerPin, verifyOwnerPin } from '../../core/ownerLock';
 import { LANGUAGE_OPTIONS, type Language, type Strings } from '../../i18n';
 import {
   downloadEncryptedBackup,
@@ -52,6 +59,8 @@ export function SettingsScreen({
   onLanguageChange,
   onCurrencyChange,
   onCountryPackChange,
+  onShopProfileChange,
+  onOwnerPinChange,
   onDataRestored,
 }: {
   db: SQLiteDatabase;
@@ -63,6 +72,8 @@ export function SettingsScreen({
   onLanguageChange: (language: Language) => Promise<void>;
   onCurrencyChange: (currency: CurrencyCode) => Promise<void>;
   onCountryPackChange: (country: CountryPackCode) => Promise<void>;
+  onShopProfileChange: (profile: ShopProfile) => Promise<void>;
+  onOwnerPinChange: (pin: string | null) => Promise<void>;
   onDataRestored: () => Promise<void>;
 }) {
   const [phrase, setPhrase] = useState('');
@@ -73,6 +84,12 @@ export function SettingsScreen({
   const [staffName, setStaffName] = useState('');
   const [staffPin, setStaffPin] = useState('');
   const [partnerCode, setPartnerCode] = useState('');
+  const [shopName, setShopName] = useState('');
+  const [shopPhone, setShopPhone] = useState('');
+  const [ownerPinNew, setOwnerPinNew] = useState('');
+  const [ownerPinCurrent, setOwnerPinCurrent] = useState('');
+  // Read once per render; onOwnerPinChange triggers a parent re-render.
+  const lockEnabled = isOwnerLockEnabled();
   const cloudUrl = process.env.EXPO_PUBLIC_CLOUD_BACKUP_URL;
   const store = useMemo(() => cloudUrl ? new HttpCloudBackupStore(cloudUrl) : null, [cloudUrl]);
 
@@ -91,6 +108,11 @@ export function SettingsScreen({
 
   useEffect(() => {
     void getSetting(db, PARTNER_REFERRAL_SETTING).then(value => setPartnerCode(value ?? ''));
+  }, [db]);
+
+  useEffect(() => {
+    void getSetting(db, SHOP_NAME_SETTING_KEY).then(value => setShopName(value ?? ''));
+    void getSetting(db, SHOP_PHONE_SETTING_KEY).then(value => setShopPhone(value ?? ''));
   }, [db]);
 
   const addStaff = async () => {
@@ -168,6 +190,30 @@ export function SettingsScreen({
         <View style={{ width: 50 }} />
       </View>
       <ScrollView contentContainerStyle={settingsStyles.content}>
+        <Section title={strings.SHOP_PROFILE} hint={strings.SHOP_PROFILE_HINT}>
+          <TextInput
+            style={settingsStyles.inputSmall}
+            placeholder={strings.SHOP_NAME_PLACEHOLDER}
+            placeholderTextColor={color.inkMuted}
+            maxLength={SHOP_TEXT_MAX_LENGTH}
+            value={shopName}
+            onChangeText={setShopName}
+          />
+          <TextInput
+            style={settingsStyles.inputSmall}
+            placeholder={strings.SHOP_PHONE_PLACEHOLDER}
+            placeholderTextColor={color.inkMuted}
+            keyboardType="phone-pad"
+            maxLength={SHOP_TEXT_MAX_LENGTH}
+            value={shopPhone}
+            onChangeText={setShopPhone}
+          />
+          <Choice label={strings.SHOP_PROFILE_SAVE} onPress={async () => {
+            await onShopProfileChange({ shop_name: shopName, shop_phone: shopPhone });
+            Alert.alert(strings.SHOP_PROFILE_SAVED);
+          }} />
+        </Section>
+
         <Section title={strings.COUNTRY_PACK} hint={strings.COUNTRY_PACK_HINT}>
           {COUNTRY_PACK_CODES.map(code => (
             <Choice
@@ -200,10 +246,68 @@ export function SettingsScreen({
               label={option.label}
               detail={option.reviewed ? undefined : strings.LANGUAGE_REVIEW_PENDING}
               selected={language === option.code}
-              disabled={!option.reviewed}
               onPress={() => onLanguageChange(option.code)}
             />
           ))}
+        </Section>
+
+        <Section title={strings.OWNER_LOCK} hint={strings.OWNER_LOCK_HINT}>
+          {lockEnabled && <Text style={settingsStyles.success}>{strings.OWNER_LOCK_ON}</Text>}
+          {/* Changing or removing the PIN requires the current one -- the
+              phone lives in the worker's hands, and a lock a worker can
+              quietly remove is not a lock. */}
+          {lockEnabled && (
+            <TextInput
+              style={settingsStyles.inputSmall}
+              placeholder={strings.OWNER_PIN_CURRENT}
+              placeholderTextColor={color.inkMuted}
+              keyboardType="number-pad"
+              secureTextEntry
+              maxLength={4}
+              value={ownerPinCurrent}
+              onChangeText={value => setOwnerPinCurrent(value.replace(/\D/g, ''))}
+            />
+          )}
+          <TextInput
+            style={settingsStyles.inputSmall}
+            placeholder={strings.OWNER_PIN_PLACEHOLDER}
+            placeholderTextColor={color.inkMuted}
+            keyboardType="number-pad"
+            secureTextEntry
+            maxLength={4}
+            value={ownerPinNew}
+            onChangeText={value => setOwnerPinNew(value.replace(/\D/g, ''))}
+          />
+          <Choice
+            label={lockEnabled ? strings.OWNER_LOCK_CHANGE : strings.OWNER_LOCK_ENABLE}
+            disabled={!isValidOwnerPin(ownerPinNew) || (lockEnabled && ownerPinCurrent.length !== 4)}
+            onPress={async () => {
+              if (lockEnabled && !verifyOwnerPin(ownerPinCurrent)) {
+                Alert.alert(strings.OWNER_WRONG_PIN);
+                return;
+              }
+              await onOwnerPinChange(ownerPinNew);
+              setOwnerPinNew('');
+              setOwnerPinCurrent('');
+              Alert.alert(strings.OWNER_LOCK_CHANGED);
+            }}
+          />
+          {lockEnabled && (
+            <Choice
+              label={strings.OWNER_LOCK_DISABLE}
+              disabled={ownerPinCurrent.length !== 4}
+              onPress={async () => {
+                if (!verifyOwnerPin(ownerPinCurrent)) {
+                  Alert.alert(strings.OWNER_WRONG_PIN);
+                  return;
+                }
+                await onOwnerPinChange(null);
+                setOwnerPinNew('');
+                setOwnerPinCurrent('');
+                Alert.alert(strings.OWNER_LOCK_CHANGED);
+              }}
+            />
+          )}
         </Section>
 
         <Section title={strings.STAFF_MODE} hint={strings.STAFF_MODE_HINT}>
