@@ -9,10 +9,12 @@ That is the right trade *today* and the wrong trade the moment a shop owner
 counts their stock into it. This file is the list of those trades, what each
 one does, why it exists, and what to do about it.
 
-**Current status:** data-reset and backup-format tripwires are resolved. The
+**Current status:** data-reset and backup-format tripwires are resolved in
+schema v11 / backup format v7. The
 Android 1.0.1 preview build completed successfully on 14 July 2026
 ([install page](https://expo.dev/accounts/yasinali69/projects/ShopTrackApp/builds/7f20af1b-0663-41ab-ab0c-fbc9721f1601)). The real Android
-upgrade/backup/restore rehearsal is still required before Day 0.
+upgrade/backup/restore rehearsal — including the new photo paths — is still
+required before Day 0.
 
 ---
 
@@ -22,14 +24,14 @@ upgrade/backup/restore rehearsal is still required before Day 0.
 |---|---|
 | **Where** | `src/core/schema.ts` — `migrateDatabase()` and `initDatabase()` |
 | **Now** | Destructive reset removed; supported versions migrate in place |
-| **Test** | `schema.test.ts` migrates a populated v4 database and proves every row survives |
+| **Test** | `schema.test.ts` migrates populated legacy databases, including v2 and v10, and proves their rows survive |
 | **If ignored** | An app update wipes every shop's books. Silently. |
 
 ### Current behaviour
 
 On startup, `initDatabase()` compares `PRAGMA user_version` with
-`SCHEMA_VERSION`. Fresh databases are created at the current shape. Committed
-versions 2 through 4 follow additive, transactional migrations to version 5.
+`SCHEMA_VERSION`. Fresh databases are created at schema v11. Committed
+versions 2 through 10 follow additive, transactional migrations to version 11.
 Unknown or future versions fail closed and leave every row untouched.
 
 Every future `SCHEMA_VERSION` bump must add a migration and a populated upgrade
@@ -42,20 +44,58 @@ test. There is deliberately no reset flag and no drop-all fallback anymore.
 | | |
 |---|---|
 | **Where** | `src/core/db.ts` — `BACKUP_FORMAT_VERSION`, `createBackup`, `restoreBackup` |
-| **Now** | Format v2 is independent from the schema version; formats v1 and the old three-table file have upgraders |
-| **Test** | All eight tables round-trip; an invalid restore rolls back without replacing current data |
+| **Now** | Format v7 is independent from the schema version; formats v1–v6 and old schema-stamped v2–v5 three-table files have upgraders |
+| **Test** | All ten database collections plus referenced media round-trip; invalid database or media restores roll back without replacing current data |
 | **If ignored** | Every backup a shop has made becomes unrestorable the first time you change the schema |
 
 ### Current behaviour
 
 `backup_format_version` changes only when the JSON contract changes;
-`schema_version` is informational. A backup contains products, stock movements,
-count sessions, customers, credit entries, expenses, cash-ups, and sales
-entries. Restore validates before writing, replaces all eight sets
-transactionally, and rolls back to the existing shop if any row is invalid.
-Format-1 files (made before the sales book existed) and the old pre-pilot
-three-table version-5 file are upgraded on import with explicit empty newer
-tables.
+`schema_version` is informational. A v7 backup contains products, stock
+movements, count sessions, customers, credit entries, expenses, cash-ups,
+sales entries, settings, and staff members, plus an exact manifest of referenced
+product, customer, and receipt JPEGs embedded as base64. Restore validates all
+rows, managed paths, ownership, MIME, size, JPEG markers, and media references
+before replacing anything. Files are staged beside the live media root; a
+durable file-system journal and SQLite marker let startup finish or roll back a
+restore interrupted by process death. Formats 1–6 and the old pre-pilot
+schema-stamped v2–v5 three-table files are upgraded on import with explicit
+empty/default newer fields.
+
+Android document-provider MIME labels are treated as advisory: the picker lets
+the content validator decide whether a selected file is a backup, and the text
+parser strips an optional UTF-8 byte-order mark before JSON validation. A valid
+ShopTrack file therefore is not rejected merely because Drive, WhatsApp, or a
+download manager called it `text/plain` or `application/octet-stream`.
+
+Both local-file and encrypted-cloud restores show the same validated preview
+(shop, backup date, and record/media counts) before replacement. Immediately
+before mutation, ShopTrack writes and verifies a complete private snapshot of
+the current phone; failure aborts the restore. The newest three are retained,
+and a successful restore offers an immediate Undo that snapshots the new state
+before restoring the previous one. This native filesystem/Alert sequence is
+part of Tripwire 3's physical-phone rehearsal.
+
+### Photo and backup privacy boundary
+
+- App-created photos are resized to at most 800 px on the long edge and stored
+  under a purpose-specific, app-owned path. Startup removes unreferenced draft
+  files; deleting/deactivating the parent clears the database reference before
+  the UI removes the file.
+- Private daily snapshots and encrypted cloud envelopes are complete, including
+  customer/ID photos. A plaintext JSON explicitly shared to WhatsApp, Drive, or
+  another app removes every customer-photo reference and byte; product and
+  receipt photos remain part of that shared backup.
+- Android OS app-data backup is disabled with `android.allowBackup: false`.
+  This prevents the operating system from silently copying the private database
+  or customer photos into an uncontrolled backup. It also means uninstalling
+  ShopTrack removes its private daily snapshots: before deleting the app, the
+  owner must copy an explicit backup somewhere outside ShopTrack.
+- The core tests prove coordinated SQL/media commit, rollback, marker handling,
+  validation, legacy-format normalization, and customer-photo redaction; a
+  wiring contract pins journal recovery before orphan sweeping. Only a
+  real-device rehearsal can prove Android's camera/gallery, document-provider,
+  file-system interruption, uninstall, and second-device behavior.
 
 ### The tripwire fired once — the sales book was missing from backups
 
@@ -77,8 +117,8 @@ the phone it is already on.
 
 | | |
 |---|---|
-| **Where** | `src/core/schema.ts`, exercised by `src/core/schema.test.ts` |
-| **Now** | Tested against `node:sqlite` in CI-style tests only |
+| **Where** | `src/core/schema.ts`, `src/core/db.ts`, and `src/media/photoBackupAdapter.ts` |
+| **Now** | SQL/media rules are unit- and contract-tested; bundles compile, but the native file-system path has not run here |
 | **Before pilot** | Run on a real Android device with real data |
 | **If ignored** | A schema step that works in node may behave differently under expo-sqlite |
 
@@ -98,12 +138,22 @@ the device case.
 
 ### What to do
 
-Before Day 0 of the pilot, on a real Android phone:
+Before Day 0 of the pilot, on real Android hardware (use a second install/device
+for the last restore):
 
 1. Install the previous build, add products, record a count, a credit entry, and an expense.
-2. Install the 1.0.1 preview build over it without uninstalling the app.
-3. Confirm every original row remains and the new column/table is usable.
-4. Make a backup and restore it.
+2. Install the current preview build over it without uninstalling the app.
+3. Confirm every original row remains and the v11 photo columns are usable.
+4. Capture and choose product, customer, and receipt photos; confirm thumbnails,
+   replacement, removal, 800 px resizing, and parent-deletion cleanup.
+5. Copy an explicit backup outside the app, inspect that a plaintext shared copy
+   excludes customer/ID media, and restore it on the second install. Also verify
+   a complete encrypted/private path preserves customer media when that path is
+   available.
+6. Kill/relaunch around a picker and staged restore, confirming recovery leaves
+   either the complete old shop or the complete restored shop, never a mixture.
+7. Look up one barcode online through Open Food Facts, then repeat in airplane
+   mode and confirm the cached editable prefill still resolves.
 
 ---
 
@@ -152,8 +202,9 @@ pilot to find this class of thing.
 
 `npm run test:ui-flow` now pins the critical screen wiring (Review before save,
 first-count language, Undo, state-driven Home, scrollable Weekly Summary,
-searchable Stock-In, and bilingual core copy), and both web and Android bundles
-are compiled before a pilot build. That catches wiring and bundling regressions;
+searchable Stock-In, photo lifecycle/privacy contracts, Android hardware-Back
+ownership, and localized core copy), and both web and Android bundles are
+compiled before a pilot build. That catches wiring and bundling regressions;
 the real-phone tap-through remains the final proof.
 
 ---

@@ -38,8 +38,6 @@ console.assert = (condition?: boolean, ...data: unknown[]) => {
 
 const MONDAY = 1705200000000;    // Some Monday
 const FRIDAY = 1705632000000;    // That Friday (5 days later)
-const NEXT_MONDAY = 1705804800000; // Following Monday
-
 function createProduct(overrides: Partial<Product> = {}): Product {
   return {
     id: 1,
@@ -287,6 +285,56 @@ console.log('');
 console.assert(summary.total_units_sold === 64, 'Should sell 64 units total');
 console.assert(summary.total_estimated_revenue === 900, 'Revenue should be R900');
 console.assert(summary.total_estimated_profit === 232, 'Profit should be R232');
+
+// ============================================
+// TEST: Currency boundaries do not leak binary floating-point drift
+// ============================================
+
+console.log('TEST: Currency boundaries stay at cents');
+console.log('========================================');
+
+const centsProduct = createProduct({
+  id: 10,
+  name: 'Small item',
+  buy_price: 0.1,
+  sell_price: 0.3,
+});
+const centsMovements: StockMovement[] = [
+  createMovement({
+    id: 10,
+    product_id: 10,
+    type: 'STOCK_IN',
+    quantity: 3,
+    buy_price_at_time: 0.1,
+    recorded_at: MONDAY,
+  }),
+  createMovement({
+    id: 11,
+    product_id: 10,
+    type: 'COUNT',
+    quantity: 0,
+    sell_price_at_time: 0.3,
+    recorded_at: FRIDAY,
+  }),
+];
+const centsMetrics = calculateProductMetrics(
+  centsProduct,
+  centsMovements,
+  MONDAY,
+  FRIDAY
+);
+const centsSummary = calculatePeriodSummary(
+  [centsProduct],
+  centsMovements,
+  MONDAY,
+  FRIDAY
+);
+
+console.assert(centsMetrics.estimated_revenue === 0.9, '0.3 times 3 is exactly R0.90');
+console.assert(centsMetrics.estimated_profit === 0.6, 'revenue minus cost is exactly R0.60');
+console.assert(centsSummary.total_stock_in_cost === 0.3, 'stock cost total is exactly R0.30');
+console.assert(centsSummary.total_estimated_revenue === 0.9, 'period revenue stays at cents');
+console.assert(centsSummary.total_estimated_profit === 0.6, 'period profit stays at cents');
 
 // ============================================
 // TEST: Period Bounds Helper

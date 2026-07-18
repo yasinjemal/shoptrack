@@ -29,6 +29,7 @@ CREATE TABLE products (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     name                TEXT NOT NULL,                -- "Bread", "Coke 500ml", "Airtime R10"
     barcode             TEXT,                         -- Optional finder; never a per-sale scan
+    photo_path          TEXT,                         -- App-owned logical JPEG path; NULL = no photo
     unit_label          TEXT DEFAULT 'units',         -- Display only: 'each', 'bottle', 'pack' (no math)
     buy_price           REAL,                         -- What owner pays (cost price); NULL = not yet known
     sell_price          REAL,                         -- What customer pays; NULL = not yet known
@@ -117,6 +118,7 @@ CREATE TABLE customers (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT NOT NULL,
     phone       TEXT,                             -- Optional
+    photo_path  TEXT,                             -- App-owned logical JPEG path; NULL = no photo
     is_active   INTEGER NOT NULL DEFAULT 1,       -- Soft delete; history is never removed
     created_at  INTEGER NOT NULL DEFAULT 0,       -- Unix timestamp (ms)
     updated_at  INTEGER NOT NULL DEFAULT 0        -- Unix timestamp (ms)
@@ -209,6 +211,7 @@ CREATE TABLE expenses (
                    ('RENT', 'ELECTRICITY', 'TRANSPORT', 'WAGES', 'AIRTIME', 'OTHER')),
     amount       REAL NOT NULL CHECK (amount > 0),
     notes        TEXT,                              -- "Taxi to cash and carry"
+    receipt_photo_path TEXT,                        -- Optional app-owned receipt JPEG path
     recorded_at  INTEGER NOT NULL                   -- Unix timestamp (ms)
 );
 

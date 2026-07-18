@@ -44,6 +44,63 @@ export const salesStyles = StyleSheet.create({
     textAlign: 'center',
   },
 
+  // Comparisons derived only from the periods the owner actually recorded.
+  statisticsCard: {
+    marginHorizontal: space.base,
+    marginTop: space.md,
+    backgroundColor: color.surface,
+    padding: space.base,
+    borderRadius: radius.lg,
+    ...elevation.card,
+  },
+  statisticsTitle: {
+    ...type.h2,
+    color: color.ink,
+  },
+  statisticsPeriod: {
+    ...type.caption,
+    color: color.inkMuted,
+    marginTop: 2,
+  },
+  statisticsDays: {
+    flexDirection: 'row',
+    gap: space.sm,
+    marginTop: space.base,
+  },
+  statisticsDay: {
+    flex: 1,
+    backgroundColor: color.surfaceSunken,
+    borderRadius: radius.md,
+    padding: space.md,
+  },
+  statisticsLabel: {
+    ...type.label,
+    color: color.inkSecondary,
+  },
+  statisticsValue: {
+    ...type.h2,
+    color: color.greenInk,
+    marginTop: space.xs,
+  },
+  statisticsDetail: {
+    ...type.caption,
+    color: color.inkMuted,
+    marginTop: space.xs,
+    lineHeight: 18,
+  },
+  statisticsHint: {
+    ...type.caption,
+    color: color.inkMuted,
+    marginTop: space.base,
+    lineHeight: 18,
+  },
+  statisticsSection: {
+    borderTopWidth: 1,
+    borderTopColor: color.border,
+    marginTop: space.base,
+    paddingTop: space.base,
+  },
+
   // A month whose total and days disagree
   conflictCard: {
     marginHorizontal: space.base,

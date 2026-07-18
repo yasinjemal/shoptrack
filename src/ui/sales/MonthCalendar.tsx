@@ -34,6 +34,7 @@ import { StatusBar } from 'expo-status-bar';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { formatMoney, getCurrentCurrency } from '../../core/currency';
 import { localCalendarDayLabel } from '../../core/localDate';
+import { parseNonNegativeDecimal } from '../../core/userNumber';
 
 import {
   calculateMonth,
@@ -52,6 +53,7 @@ import { styles } from '../styles';
 import { color } from '../theme';
 import { calendarStyles as cal } from './calendarStyles';
 import type { SalesStrings } from './SalesScreen';
+import { ScreenHeader } from '../components/ScreenHeader';
 
 /**
  * Pick a month out of a year.
@@ -81,16 +83,20 @@ export function YearPicker({
     <SafeAreaView style={styles.container}>
       <StatusBar style="dark" />
 
-      <View style={styles.screenHeader}>
-        <Pressable onPress={onCancel} hitSlop={8}>
-          <Text style={styles.backButton}>{strings.SALES_CANCEL}</Text>
-        </Pressable>
-        <Text style={styles.screenTitle}>{strings.SALES_PICK_MONTH}</Text>
-        <View style={{ width: 50 }} />
-      </View>
+      <ScreenHeader
+        title={strings.SALES_PICK_MONTH}
+        leftLabel={strings.SALES_CANCEL}
+        onLeft={onCancel}
+      />
 
       <View style={cal.yearBar}>
-        <Pressable style={cal.yearArrow} onPress={() => setYear(y => y - 1)} hitSlop={12}>
+        <Pressable
+          style={cal.yearArrow}
+          accessibilityRole="button"
+          accessibilityLabel={String(year - 1)}
+          onPress={() => setYear(y => y - 1)}
+          hitSlop={12}
+        >
           <Text style={cal.yearArrowText}>‹</Text>
         </Pressable>
         <Text style={cal.yearLabel}>{year}</Text>
@@ -98,6 +104,9 @@ export function YearPicker({
           style={[cal.yearArrow, year >= thisYear && cal.yearArrowDisabled]}
           onPress={() => year < thisYear && setYear(y => y + 1)}
           disabled={year >= thisYear}
+          accessibilityRole="button"
+          accessibilityLabel={String(year + 1)}
+          accessibilityState={{ disabled: year >= thisYear }}
           hitSlop={12}
         >
           <Text style={cal.yearArrowText}>›</Text>
@@ -110,27 +119,52 @@ export function YearPicker({
           const future = key > current;
           const month = calculateMonth(key, entries);
           const filled = month.source !== 'none';
+          const recordedDays = entries.filter(
+            entry => entry.period === 'DAY' && entry.period_key.startsWith(`${key}-`)
+          ).length;
+          const totalDays = daysInMonth(key).length;
+          const complete = month.source === 'month' || recordedDays === totalDays;
+          const partial = filled && !complete;
+          const monthName = formatMonth(key).split(' ')[0];
+          const accessibilityLabel = future
+            ? monthName
+            : filled
+              ? `${monthName}. ${month.source === 'days'
+                ? strings.SALES_DAYS_FILLED(recordedDays, totalDays)
+                : strings.SALES_MONTH_TOTAL}. ${formatMoney(month.sales, 0)}`
+              : `${monthName}. ${strings.SALES_EMPTY}`;
 
           return (
             <Pressable
               key={key}
               style={({ pressed }) => [
                 cal.monthTile,
-                filled && cal.monthTileFilled,
+                complete && cal.monthTileComplete,
+                partial && cal.monthTilePartial,
                 future && cal.monthTileDisabled,
                 pressed && !future && cal.monthTilePressed,
               ]}
               android_ripple={future ? undefined : { color: color.ripple }}
               onPress={() => !future && onPick(key)}
               disabled={future}
+              accessibilityRole="button"
+              accessibilityLabel={accessibilityLabel}
+              accessibilityState={{ disabled: future }}
             >
               <Text style={[cal.monthTileName, future && cal.monthTileNameDisabled]}>
-                {formatMonth(key).split(' ')[0]}
+                {monthName}
               </Text>
               {filled ? (
-                <Text style={cal.monthTileAmount}>{formatMoney(month.sales, 0)}</Text>
+                <>
+                  <Text style={cal.monthTileAmount}>{formatMoney(month.sales, 0)}</Text>
+                  <Text style={[cal.monthTileStatus, partial && cal.monthTileStatusPartial]}>
+                    {month.source === 'days'
+                      ? `${complete ? '✓ ' : ''}${recordedDays}/${totalDays}`
+                      : '✓'}
+                  </Text>
+                </>
               ) : (
-                <Text style={cal.monthTileEmpty}>{future ? '' : '—'}</Text>
+                <Text style={cal.monthTileEmpty}>{future ? '—' : `0/${totalDays}`}</Text>
               )}
             </Pressable>
           );
@@ -188,17 +222,22 @@ export function MonthCalendar({
   const [margin, setMargin] = useState(String(existingMargin ?? defaultMargin));
   const [saving, setSaving] = useState(false);
 
-  const marginPct = parseFloat(margin);
-  const marginValid = !Number.isNaN(marginPct) && marginPct >= 0 && marginPct <= 100;
+  const parsedMargin = parseNonNegativeDecimal(margin);
+  const marginPct = parsedMargin ?? 0;
+  const marginValid = parsedMargin !== null && marginPct <= 100;
 
   // Only days actually typed in. Blank days are skipped, not zeroed.
-  const filled = days
+  const parsedFilled = days
     .filter(d => (amounts[d] ?? '').trim() !== '')
-    .map(d => ({ dayKey: d, amount: parseFloat(amounts[d]) || 0 }));
+    .map(d => ({ dayKey: d, amount: parseNonNegativeDecimal(amounts[d] ?? '') }));
+  const amountsValid = parsedFilled.every(d => d.amount !== null);
+  const filled = parsedFilled.flatMap(d =>
+    d.amount === null ? [] : [{ dayKey: d.dayKey, amount: d.amount }]
+  );
 
   const total = filled.reduce((sum, d) => sum + d.amount, 0);
   const keeps = marginValid ? total * (marginPct / 100) : 0;
-  const canSave = filled.length > 0 && marginValid && !saving;
+  const canSave = filled.length > 0 && amountsValid && marginValid && !saving;
 
   const handleSave = async () => {
     if (!canSave) return;
@@ -217,13 +256,7 @@ export function MonthCalendar({
     <SafeAreaView style={styles.container}>
       <StatusBar style="dark" />
 
-      <View style={styles.screenHeader}>
-        <Pressable onPress={onCancel} hitSlop={8}>
-          <Text style={styles.backButton}>{strings.SALES_CANCEL}</Text>
-        </Pressable>
-        <Text style={styles.screenTitle}>{formatMonth(month)}</Text>
-        <View style={{ width: 50 }} />
-      </View>
+      <ScreenHeader title={formatMonth(month)} leftLabel={strings.SALES_CANCEL} onLeft={onCancel} />
 
       {/* The running total sits above the list, not below it: it is the thing
           the owner checks against the bottom of their page. */}
@@ -261,6 +294,7 @@ export function MonthCalendar({
                   placeholderTextColor={color.inkMuted}
                   keyboardType="decimal-pad"
                   returnKeyType="next"
+                  accessibilityLabel={`${formatMonth(month)} ${dayNumber(d)}`}
                 />
               </View>
             </View>
@@ -296,6 +330,9 @@ export function MonthCalendar({
           ]}
           onPress={handleSave}
           disabled={!canSave}
+          accessibilityRole="button"
+          accessibilityLabel={strings.SALES_SAVE}
+          accessibilityState={{ disabled: !canSave, busy: saving }}
         >
           <Text style={cal.saveButtonText}>
             {saving ? strings.SALES_SAVING : strings.SALES_SAVE}

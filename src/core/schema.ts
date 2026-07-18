@@ -26,13 +26,14 @@ export interface MigrationDb {
  * Bump this whenever the table shape changes. Every bump after the first pilot
  * build must add a migration below; shop data is never reset to change shape.
  */
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 const CREATE_PRODUCTS = `
   CREATE TABLE IF NOT EXISTS products (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     barcode TEXT,
+    photo_path TEXT,
     unit_label TEXT DEFAULT 'units',
     buy_price REAL,
     sell_price REAL,
@@ -83,6 +84,7 @@ const CREATE_CUSTOMERS = `
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     name        TEXT NOT NULL,
     phone       TEXT,
+    photo_path  TEXT,
     is_active   INTEGER NOT NULL DEFAULT 1,
     created_at  INTEGER NOT NULL DEFAULT 0,
     updated_at  INTEGER NOT NULL DEFAULT 0
@@ -144,6 +146,7 @@ const CREATE_EXPENSES = `
                    ('RENT', 'ELECTRICITY', 'TRANSPORT', 'WAGES', 'AIRTIME', 'OTHER')),
     amount       REAL NOT NULL CHECK (amount > 0),
     notes        TEXT,
+    receipt_photo_path TEXT,
     recorded_at  INTEGER NOT NULL
   );
 `;
@@ -292,8 +295,9 @@ const CREATE_INDEXES = `
 /**
  * Upgrade a database created by an earlier committed ShopTrack schema.
  *
- * Versions 2→3, 3→4, 5→6, 6→7 and 8→9 add tables. Versions 4→5, 7→8 and 8→9
- * add nullable columns. They are intentionally small, additive migrations:
+ * Versions 2→3, 3→4, 5→6, 6→7 and 8→9 add tables. Versions 4→5,
+ * 7→8, 8→9, 9→10 and 10→11 add nullable columns or indexes. They are
+ * intentionally small, additive migrations:
  * all rows remain in place and a partially completed column step can safely
  * resume (every ALTER is guarded by a table_info check).
  */
@@ -393,6 +397,28 @@ async function migrateDatabase(db: MigrationDb, fromVersion: number): Promise<vo
       await db.execAsync('PRAGMA user_version = 10;');
     });
     version = 10;
+  }
+
+  if (version === 10) {
+    await db.withTransactionAsync(async () => {
+      const productColumns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(products)');
+      if (!productColumns.some(column => column.name === 'photo_path')) {
+        await db.execAsync('ALTER TABLE products ADD COLUMN photo_path TEXT;');
+      }
+
+      const customerColumns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(customers)');
+      if (!customerColumns.some(column => column.name === 'photo_path')) {
+        await db.execAsync('ALTER TABLE customers ADD COLUMN photo_path TEXT;');
+      }
+
+      const expenseColumns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(expenses)');
+      if (!expenseColumns.some(column => column.name === 'receipt_photo_path')) {
+        await db.execAsync('ALTER TABLE expenses ADD COLUMN receipt_photo_path TEXT;');
+      }
+
+      await db.execAsync('PRAGMA user_version = 11;');
+    });
+    version = 11;
   }
 
   if (version !== SCHEMA_VERSION) {

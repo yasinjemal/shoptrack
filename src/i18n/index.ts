@@ -28,11 +28,11 @@ export const STRINGS: Record<Language, Strings> = { en, zu, xh, st, af, sw, am, 
  * which is the only place a translation can actually be judged. The
  * "review pending" note in Settings is the honesty label, not a gate.
  */
-export const LANGUAGE_OPTIONS: ReadonlyArray<{
+export const LANGUAGE_OPTIONS: readonly {
   code: Language;
   label: string;
   reviewed: boolean;
-}> = [
+}[] = [
   { code: 'en', label: 'English', reviewed: true },
   { code: 'zu', label: 'isiZulu', reviewed: true },
   { code: 'xh', label: 'isiXhosa', reviewed: false },

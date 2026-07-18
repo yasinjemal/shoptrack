@@ -19,6 +19,7 @@ import { StatusBar } from 'expo-status-bar';
 import { unlockOwner } from '../../core/ownerLock';
 import { styles } from '../styles';
 import { color } from '../theme';
+import { ScreenHeader } from '../components/ScreenHeader';
 
 export interface OwnerGateStrings {
   BACK: string;
@@ -54,13 +55,7 @@ export function OwnerGateScreen({
     <SafeAreaView style={styles.container}>
       <StatusBar style="dark" />
 
-      <View style={styles.screenHeader}>
-        <Pressable onPress={onBack} hitSlop={8}>
-          <Text style={styles.backButton}>{strings.BACK}</Text>
-        </Pressable>
-        <Text style={styles.screenTitle}>{strings.OWNER_ONLY_TITLE}</Text>
-        <View style={{ width: 50 }} />
-      </View>
+      <ScreenHeader title={strings.OWNER_ONLY_TITLE} leftLabel={strings.BACK} onLeft={onBack} />
 
       <View style={{ padding: 20, gap: 12 }}>
         <Text style={styles.inputLabel}>{strings.OWNER_ONLY_HINT}</Text>
@@ -73,13 +68,18 @@ export function OwnerGateScreen({
           maxLength={4}
           autoFocus
           value={pin}
+          accessibilityLabel={strings.OWNER_PIN_CURRENT}
           onChangeText={value => {
             setPin(value.replace(/\D/g, ''));
             setWrong(false);
           }}
           onSubmitEditing={tryUnlock}
         />
-        {wrong && <Text style={styles.inputHint}>{strings.OWNER_WRONG_PIN}</Text>}
+        {wrong && (
+          <Text style={styles.inputHint} accessibilityRole="alert" accessibilityLiveRegion="polite">
+            {strings.OWNER_WRONG_PIN}
+          </Text>
+        )}
         <Pressable
           style={({ pressed }) => [
             styles.saveButton,
@@ -87,6 +87,9 @@ export function OwnerGateScreen({
             pressed && pin.length === 4 && { opacity: 0.85 },
           ]}
           disabled={pin.length !== 4}
+          accessibilityRole="button"
+          accessibilityLabel={strings.OWNER_UNLOCK}
+          accessibilityState={{ disabled: pin.length !== 4 }}
           onPress={tryUnlock}
         >
           <Text style={styles.saveButtonText}>{strings.OWNER_UNLOCK}</Text>

@@ -98,6 +98,55 @@ export interface SalesBookStatement {
   months: number;
 }
 
+export interface SalesChange {
+  /** Current period minus the comparison period. */
+  amount: number;
+  /** Null when the earlier period is zero, because a percentage is undefined. */
+  percent: number | null;
+  direction: 'up' | 'down' | 'same';
+}
+
+export interface DailySalesStatistic {
+  day_key: string;
+  sales: number;
+  profit: number;
+}
+
+export interface SalesMonthComparison {
+  current: Pick<MonthlySales, 'month_key' | 'sales' | 'profit'>;
+  previous: Pick<MonthlySales, 'month_key' | 'sales' | 'profit'>;
+  sales_change: SalesChange;
+  profit_change: SalesChange;
+}
+
+export interface SalesYearToDatePeriod {
+  year: number;
+  sales: number;
+  profit: number;
+  /** Missing months are unknown, never silently treated as zero. */
+  months_recorded: number;
+}
+
+export interface SalesYearToDateStatistic {
+  /** Calendar month number (1-12) covered by both sides of the comparison. */
+  through_month: number;
+  current: SalesYearToDatePeriod;
+  previous: SalesYearToDatePeriod | null;
+  sales_change: SalesChange | null;
+  profit_change: SalesChange | null;
+}
+
+export interface SalesStatistics {
+  /** Newest recorded month; the UI labels this explicitly. */
+  month_key: string;
+  /** Only individual day entries can truthfully identify a best/quietest day. */
+  highest_day: DailySalesStatistic | null;
+  lowest_day: DailySalesStatistic | null;
+  /** Only adjacent calendar months are compared. Gaps are not disguised. */
+  month_over_month: SalesMonthComparison | null;
+  year_to_date: SalesYearToDateStatistic;
+}
+
 export interface SalesHistory {
   /** Every month with data, newest first. */
   months: MonthlySales[];
@@ -108,6 +157,8 @@ export interface SalesHistory {
   months_recorded: number;
   /** Months where a total and individual days disagree about the same trading. */
   conflicts: MonthlySales[];
+  /** Comparisons anchored to the newest recorded month; null for an empty book. */
+  statistics: SalesStatistics | null;
 }
 
 /**
@@ -309,6 +360,73 @@ export function calculateSalesHistory(entries: SalesEntry[]): SalesHistory {
     average_margin_pct: total_sales > 0 ? round2((total_profit / total_sales) * 100) : 0,
     months_recorded: months.filter(m => m.source !== 'none').length,
     conflicts: months.filter(m => m.has_conflict),
+    statistics: months[0] ? calculateSalesStatistics(entries, months[0].month_key) : null,
+  };
+}
+
+/**
+ * Derive comparisons without inventing data for days or months the owner did
+ * not record. `focusMonth` is explicit so tests, historical backfills and the
+ * UI all agree on the calendar boundary.
+ */
+export function calculateSalesStatistics(
+  entries: SalesEntry[],
+  focusMonth: string,
+): SalesStatistics {
+  const current = calculateMonth(focusMonth, entries);
+  const previousKey = offsetMonth(focusMonth, -1);
+  const previous = calculateMonth(previousKey, entries);
+
+  const daily = entries
+    .filter(entry => entry.period === 'DAY' && monthOf(entry.period_key) === focusMonth)
+    .sort((a, b) => a.period_key.localeCompare(b.period_key))
+    .map(entry => ({
+      day_key: entry.period_key,
+      sales: round2(entry.amount),
+      profit: round2(entry.amount * (entry.margin_pct / 100)),
+    }));
+
+  // Keeping the first day on a tie makes the result deterministic and avoids
+  // implying that two equal days can be ranked more precisely than the data.
+  const highest_day = daily.reduce<DailySalesStatistic | null>(
+    (best, candidate) => !best || candidate.sales > best.sales ? candidate : best,
+    null,
+  );
+  const lowest_day = daily.reduce<DailySalesStatistic | null>(
+    (best, candidate) => !best || candidate.sales < best.sales ? candidate : best,
+    null,
+  );
+
+  const month_over_month = current.source !== 'none' && previous.source !== 'none'
+    ? {
+        current: monthComparisonPeriod(current),
+        previous: monthComparisonPeriod(previous),
+        sales_change: compareValues(current.sales, previous.sales),
+        profit_change: compareValues(current.profit, previous.profit),
+      }
+    : null;
+
+  const [year, through_month] = focusMonth.split('-').map(Number);
+  const currentYtd = calculateYearToDate(entries, year, through_month);
+  const previousYtd = calculateYearToDate(entries, year - 1, through_month);
+  const hasPreviousYtd = previousYtd.months_recorded > 0;
+
+  return {
+    month_key: focusMonth,
+    highest_day,
+    lowest_day,
+    month_over_month,
+    year_to_date: {
+      through_month,
+      current: currentYtd,
+      previous: hasPreviousYtd ? previousYtd : null,
+      sales_change: hasPreviousYtd
+        ? compareValues(currentYtd.sales, previousYtd.sales)
+        : null,
+      profit_change: hasPreviousYtd
+        ? compareValues(currentYtd.profit, previousYtd.profit)
+        : null,
+    },
   };
 }
 
@@ -327,4 +445,48 @@ export function summariseSalesBook(history: SalesHistory): SalesBookStatement | 
 /** Money is REAL, so a year of daily entries drifts. Round at the boundary. */
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function monthComparisonPeriod(
+  month: MonthlySales,
+): Pick<MonthlySales, 'month_key' | 'sales' | 'profit'> {
+  return { month_key: month.month_key, sales: month.sales, profit: month.profit };
+}
+
+function compareValues(current: number, previous: number): SalesChange {
+  const amount = round2(current - previous);
+  return {
+    amount,
+    percent: previous === 0
+      ? (current === 0 ? 0 : null)
+      : round1((amount / previous) * 100),
+    direction: amount > 0 ? 'up' : amount < 0 ? 'down' : 'same',
+  };
+}
+
+function calculateYearToDate(
+  entries: SalesEntry[],
+  year: number,
+  throughMonth: number,
+): SalesYearToDatePeriod {
+  const months = monthsBetween(`${year}-01`, `${year}-${pad(throughMonth)}`)
+    .map(key => calculateMonth(key, entries))
+    .filter(month => month.source !== 'none');
+
+  return {
+    year,
+    sales: round2(months.reduce((sum, month) => sum + month.sales, 0)),
+    profit: round2(months.reduce((sum, month) => sum + month.profit, 0)),
+    months_recorded: months.length,
+  };
+}
+
+function offsetMonth(key: string, offset: number): string {
+  const [year, month] = key.split('-').map(Number);
+  const zeroBased = year * 12 + month - 1 + offset;
+  return `${Math.floor(zeroBased / 12)}-${pad((zeroBased % 12 + 12) % 12 + 1)}`;
 }

@@ -11,110 +11,179 @@
 
 import { StyleSheet } from 'react-native';
 
-import { color } from '../theme';
+import { border, color, control, icon, numeric, radius, space, touch, type } from '../theme';
 
 export const expenseStyles = StyleSheet.create({
   list: {
     flex: 1,
   },
   form: {
-    padding: 20,
+    padding: space.lg,
   },
 
   // Month total
   totalCard: {
-    marginHorizontal: 16,
-    marginTop: 12,
+    marginHorizontal: space.base,
+    marginTop: space.md,
     backgroundColor: color.redSoft,
-    padding: 20,
-    borderRadius: 12,
+    padding: space.lg,
+    borderRadius: radius.md,
     alignItems: 'center',
   },
   totalLabel: {
-    fontSize: 13,
+    ...type.caption,
     color: color.inkMuted,
-    marginBottom: 4,
+    marginBottom: space.xs,
   },
   totalAmount: {
-    fontSize: 32,
-    fontWeight: '700',
+    ...type.display,
+    ...numeric,
     color: color.redInk,
   },
 
   // Category breakdown
   breakdownCard: {
-    marginHorizontal: 16,
-    marginTop: 12,
+    marginHorizontal: space.base,
+    marginTop: space.md,
     backgroundColor: color.surfaceSunken,
-    borderRadius: 12,
-    padding: 12,
+    borderRadius: radius.md,
+    padding: space.md,
   },
   breakdownRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 6,
+    paddingVertical: space.sm,
   },
   breakdownIcon: {
-    fontSize: 16,
-    marginRight: 8,
+    fontSize: icon.sm,
+    marginRight: space.sm,
   },
   breakdownName: {
     flex: 1,
-    fontSize: 14,
+    ...type.label,
     color: color.inkSecondary,
   },
   breakdownShare: {
-    fontSize: 12,
+    ...type.caption,
     color: color.inkMuted,
-    marginRight: 12,
+    marginRight: space.md,
   },
   breakdownAmount: {
-    fontSize: 14,
-    fontWeight: '600',
+    ...type.label,
+    ...numeric,
+    fontWeight: '700',
     color: color.ink,
   },
 
   // One expense
+  expenseCard: {
+    marginHorizontal: space.base,
+    marginTop: space.sm,
+    backgroundColor: color.surface,
+    borderRadius: radius.md,
+    borderWidth: border.hairline,
+    borderColor: color.border,
+    overflow: 'hidden',
+  },
   expenseRow: {
     flexDirection: 'row',
-    alignItems: 'center',
-    marginHorizontal: 16,
-    marginTop: 8,
-    backgroundColor: color.surface,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: color.border,
-    padding: 14,
+    alignItems: 'flex-start',
+    padding: space.md,
+  },
+  receiptPhoto: {
+    width: 52,
+    height: 52,
+    marginRight: space.sm,
+    borderRadius: radius.sm,
+    backgroundColor: color.surfaceSunken,
   },
   expenseIcon: {
-    fontSize: 20,
-    marginRight: 12,
+    fontSize: icon.md,
+    marginRight: space.md,
   },
   expenseBody: {
     flex: 1,
+    minWidth: 80,
   },
   expenseCategory: {
-    fontSize: 16,
-    fontWeight: '500',
+    ...type.bodyStrong,
     color: color.ink,
   },
   expenseNote: {
-    fontSize: 12,
+    ...type.caption,
     color: color.inkMuted,
-    marginTop: 2,
+    marginTop: space.xs,
   },
   expenseAmount: {
-    fontSize: 16,
-    fontWeight: '700',
+    ...type.bodyStrong,
+    ...numeric,
     color: color.redInk,
+    marginTop: space.xs,
+  },
+  removeButton: {
+    minHeight: touch.minTarget,
+    justifyContent: 'center',
+    paddingHorizontal: space.sm,
+    marginLeft: space.sm,
+    borderRadius: radius.sm,
+  },
+  removeButtonText: {
+    ...type.label,
+    color: color.redInk,
+    fontWeight: '700',
+  },
+  confirmBox: {
+    padding: space.md,
+    gap: space.xs,
+    backgroundColor: color.redSoft,
+    borderTopWidth: border.hairline,
+    borderTopColor: color.redBorder,
+  },
+  confirmTitle: {
+    ...type.bodyStrong,
+    color: color.redInk,
+  },
+  confirmHint: {
+    ...type.caption,
+    color: color.inkSecondary,
+  },
+  confirmActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: space.sm,
+    marginTop: space.sm,
+  },
+  confirmCancel: {
+    minHeight: control.compact,
+    justifyContent: 'center',
+    paddingHorizontal: space.base,
+    borderRadius: radius.sm,
+    borderWidth: border.hairline,
+    borderColor: color.borderStrong,
+    backgroundColor: color.surface,
+  },
+  confirmCancelText: {
+    ...type.bodyStrong,
+    color: color.ink,
+  },
+  confirmDelete: {
+    minHeight: control.compact,
+    justifyContent: 'center',
+    paddingHorizontal: space.base,
+    borderRadius: radius.sm,
+    backgroundColor: color.red,
+  },
+  confirmDeleteText: {
+    ...type.bodyStrong,
+    color: color.onAction,
   },
 
   // Category picker
   categoryGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 4,
+    gap: space.sm,
+    marginTop: space.xs,
   },
   categoryChip: {
     flexDirection: 'row',
@@ -143,30 +212,27 @@ export const expenseStyles = StyleSheet.create({
     fontWeight: '600',
   },
   notStockHint: {
-    fontSize: 12,
+    ...type.caption,
     color: color.inkMuted,
-    marginTop: 10,
+    marginTop: space.md,
     fontStyle: 'italic',
-    lineHeight: 17,
   },
 
   // Empty state
   emptyIcon: {
-    fontSize: 48,
-    marginBottom: 12,
+    fontSize: icon.empty,
+    marginBottom: space.md,
   },
   emptyTitle: {
-    fontSize: 20,
-    fontWeight: '600',
+    ...type.h2,
     color: color.ink,
-    marginBottom: 8,
+    marginBottom: space.sm,
     textAlign: 'center',
   },
   emptyHint: {
-    fontSize: 14,
+    ...type.label,
     color: color.inkMuted,
     textAlign: 'center',
-    marginBottom: 24,
-    lineHeight: 20,
+    marginBottom: space.xl,
   },
 });

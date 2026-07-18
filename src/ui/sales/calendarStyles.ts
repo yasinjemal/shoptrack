@@ -47,9 +47,9 @@ export const calendarStyles = StyleSheet.create({
   },
   monthTile: {
     flexGrow: 1,
-    flexBasis: '28%',
-    minWidth: 96,
-    minHeight: 76,
+    flexBasis: '42%',
+    minWidth: 120,
+    minHeight: 92,
     backgroundColor: color.surface,
     borderRadius: radius.md,
     alignItems: 'center',
@@ -57,10 +57,15 @@ export const calendarStyles = StyleSheet.create({
     padding: space.md,
     ...elevation.card,
   },
-  monthTileFilled: {
+  monthTileComplete: {
     backgroundColor: color.greenSoft,
     borderWidth: 1,
     borderColor: color.greenBorder,
+  },
+  monthTilePartial: {
+    backgroundColor: color.infoSoft,
+    borderWidth: 1,
+    borderColor: color.infoBorder,
   },
   monthTilePressed: {
     backgroundColor: color.surfaceSunken,
@@ -81,6 +86,14 @@ export const calendarStyles = StyleSheet.create({
     ...type.label,
     color: color.greenInk,
     marginTop: space.xs,
+  },
+  monthTileStatus: {
+    ...type.caption,
+    color: color.greenInk,
+    marginTop: space.xs,
+  },
+  monthTileStatusPartial: {
+    color: color.infoInk,
   },
   monthTileEmpty: {
     ...type.label,

@@ -55,6 +55,12 @@ export function dailyBackupFilename(at: number | Date): string {
   return `shoptrack-auto-${localDayKey(at)}.json`;
 }
 
+/** Lexically sortable and safe as an Android document filename. */
+export function preRestoreBackupFilename(at: number | Date): string {
+  const iso = (at instanceof Date ? at : new Date(at)).toISOString();
+  return `shoptrack-before-restore-${iso.replace(/[:.]/g, '-')}.json`;
+}
+
 /** Oldest files beyond the retention count, independent of input order. */
 export function backupFilesToDelete(fileUris: string[], keep = 7): string[] {
   return [...fileUris].sort().slice(0, Math.max(0, fileUris.length - keep));
@@ -63,4 +69,3 @@ export function backupFilesToDelete(fileUris: string[], keep = 7): string[] {
 export function isSharedBackupDue(lastSharedAt: number | null, now = Date.now()): boolean {
   return lastSharedAt == null || now - lastSharedAt >= 7 * 24 * 60 * 60 * 1000;
 }
-

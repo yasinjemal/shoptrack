@@ -17,6 +17,7 @@
       "supportsTablet": true
     },
     "android": {
+      "allowBackup": false,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -45,8 +46,15 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow ShopTrack to scan a barcode when you choose the product finder.",
+          "cameraPermission": "Allow ShopTrack to scan a barcode or take a photo only when you choose those actions.",
           "barcodeScannerEnabled": true
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow ShopTrack to choose a photo only when you add one to a shop record.",
+          "cameraPermission": "Allow ShopTrack to take a photo only when you add one to a shop record."
         }
       ]
     ]

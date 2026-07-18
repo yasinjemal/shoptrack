@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, SafeAreaView, ScrollView, Share, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, SafeAreaView, ScrollView, Share, StyleSheet, Text, TouchableOpacity } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import type { SQLiteDatabase } from 'expo-sqlite';
 
@@ -9,6 +9,8 @@ import { shopSignature } from '../../core/shopProfile';
 import { loadCashUps, loadCreditEntries, loadProducts } from '../../core/db';
 import type { Strings } from '../../i18n';
 import { color, elevation, radius, space } from '../theme';
+import { LoadingState } from '../components/LoadingState';
+import { ScreenHeader } from '../components/ScreenHeader';
 
 export function HealthReportScreen({
   db,
@@ -32,7 +34,7 @@ export function HealthReportScreen({
     ]).then(([countSessions, products, creditEntries, cashUps]) => {
       setReport(calculateBusinessHealthReport({ countSessions, products, creditEntries, cashUps }));
     }).catch(() => Alert.alert(strings.ERROR_TITLE, strings.ERROR_GENERIC));
-  }, [db]);
+  }, [db, strings.ERROR_GENERIC, strings.ERROR_TITLE]);
 
   const lines = report ? [
     strings.HEALTH_PERIOD(report.period_days),
@@ -55,17 +57,15 @@ export function HealthReportScreen({
   return (
     <SafeAreaView style={reportStyles.container}>
       <StatusBar style="dark" />
-      <View style={reportStyles.header}>
-        <TouchableOpacity onPress={onBack}><Text style={reportStyles.back}>{strings.BACK}</Text></TouchableOpacity>
-        <Text style={reportStyles.title}>{strings.HEALTH_TITLE}</Text>
-        <View style={{ width: 50 }} />
-      </View>
-      <ScrollView contentContainerStyle={reportStyles.content}>
+      <ScreenHeader title={strings.HEALTH_TITLE} leftLabel={strings.BACK} onLeft={onBack} />
+      {!report ? <LoadingState label={strings.HEALTH_TITLE} /> : <ScrollView contentContainerStyle={reportStyles.content}>
         <Text style={reportStyles.intro}>{strings.HEALTH_HINT}</Text>
         {lines.map((line, index) => <Text key={index} style={reportStyles.fact}>{line}</Text>)}
         {report && (
           <TouchableOpacity
             style={reportStyles.share}
+            accessibilityRole="button"
+            accessibilityLabel={strings.HEALTH_SHARE}
             onPress={() => {
               // A lender-facing report must say whose shop it describes.
               const signature = shopSignature();
@@ -78,7 +78,7 @@ export function HealthReportScreen({
             <Text style={reportStyles.shareText}>{strings.HEALTH_SHARE}</Text>
           </TouchableOpacity>
         )}
-      </ScrollView>
+      </ScrollView>}
     </SafeAreaView>
   );
 }

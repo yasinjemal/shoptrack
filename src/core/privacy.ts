@@ -11,13 +11,13 @@ export interface CrashEventLike {
   transaction?: string;
   fingerprint?: string[];
   exception?: {
-    values?: Array<{
+    values?: {
       type?: string;
       value?: string;
       stacktrace?: unknown;
       mechanism?: unknown;
       [key: string]: unknown;
-    }>;
+    }[];
   };
   [key: string]: unknown;
 }

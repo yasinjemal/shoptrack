@@ -1,6 +1,7 @@
 import * as Crypto from 'expo-crypto';
 import * as SecureStore from 'expo-secure-store';
 import type { SQLiteDatabase } from 'expo-sqlite';
+import { Platform } from 'react-native';
 import { entropyToMnemonic, validateMnemonic } from '@scure/bip39';
 import { wordlist } from '@scure/bip39/wordlists/english.js';
 
@@ -9,50 +10,18 @@ import {
   decryptBackupJson,
   encryptBackupJson,
   normaliseRecoveryPhrase,
-  type EncryptedBackupEnvelope,
 } from '../core/encryption';
 import {
   createBackup,
   normaliseBackup,
+  type BackupMediaReader,
   type ShopTrackBackup,
 } from '../core/db';
+import type { CloudBackupStore } from './cloudBackupStore';
+
+export { HttpCloudBackupStore, type CloudBackupStore } from './cloudBackupStore';
 
 const RECOVERY_PHRASE_KEY = 'shoptrack_cloud_recovery_phrase_v1';
-
-export interface CloudBackupStore {
-  put(objectId: string, envelope: EncryptedBackupEnvelope): Promise<void>;
-  get(objectId: string): Promise<unknown>;
-}
-
-/** Minimal backend-neutral object-store client. The payload is already encrypted. */
-export class HttpCloudBackupStore implements CloudBackupStore {
-  constructor(
-    private readonly baseUrl: string,
-    private readonly request: typeof fetch = fetch
-  ) {}
-
-  private url(objectId: string): string {
-    return `${this.baseUrl.replace(/\/$/, '')}/${encodeURIComponent(objectId)}`;
-  }
-
-  async put(objectId: string, envelope: EncryptedBackupEnvelope): Promise<void> {
-    const response = await this.request(this.url(objectId), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(envelope),
-    });
-    if (!response.ok) throw new Error(`Cloud backup upload failed (${response.status}).`);
-  }
-
-  async get(objectId: string): Promise<unknown> {
-    const response = await this.request(this.url(objectId), {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-    });
-    if (!response.ok) throw new Error(`Cloud backup download failed (${response.status}).`);
-    return response.json();
-  }
-}
 
 export async function generateRecoveryPhrase(): Promise<string> {
   return entropyToMnemonic(await Crypto.getRandomBytesAsync(16), wordlist);
@@ -65,23 +34,27 @@ export function isValidRecoveryPhrase(phrase: string): boolean {
 export async function rememberRecoveryPhrase(phrase: string): Promise<void> {
   const normalised = normaliseRecoveryPhrase(phrase);
   if (!validateMnemonic(normalised, wordlist)) throw new Error('Recovery phrase is not valid.');
+  if (Platform.OS === 'web') throw new Error('Secure recovery-phrase storage is not available on web.');
   await SecureStore.setItemAsync(RECOVERY_PHRASE_KEY, normalised);
 }
 
 export async function loadRememberedRecoveryPhrase(): Promise<string | null> {
+  if (Platform.OS === 'web') return null;
   return SecureStore.getItemAsync(RECOVERY_PHRASE_KEY);
 }
 
 export async function forgetRecoveryPhrase(): Promise<void> {
+  if (Platform.OS === 'web') return;
   await SecureStore.deleteItemAsync(RECOVERY_PHRASE_KEY);
 }
 
 export async function uploadEncryptedBackup(
   db: SQLiteDatabase,
   store: CloudBackupStore,
-  phrase: string
+  phrase: string,
+  mediaReader: BackupMediaReader
 ): Promise<{ objectId: string; createdAt: string }> {
-  const backup = await createBackup(db);
+  const backup = await createBackup(db, mediaReader);
   const envelope = await encryptBackupJson(
     JSON.stringify(backup),
     phrase,

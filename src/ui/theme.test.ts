@@ -17,7 +17,7 @@
  * Run with: npm run test:theme
  */
 
-import { color, space, type, touch, motion } from './theme';
+import { border, color, control, icon, motion, numeric, space, state, touch, type } from './theme';
 
 let failures = 0;
 
@@ -48,9 +48,6 @@ function contrast(a: string, b: string): number {
 
 /** WCAG AA for normal text. */
 const AA = 4.5;
-/** WCAG AA for text >= 24px or >= 19px bold. */
-const AA_LARGE = 3.0;
-
 function assertContrast(fg: string, bg: string, min: number, label: string) {
   const ratio = contrast(fg, bg);
   if (ratio >= min) {
@@ -83,6 +80,7 @@ console.log('========================================');
 
 // The old primary button was white on #4CAF50 = 2.78:1. It shipped.
 assertContrast(color.onAction, color.green, AA, 'white on green button');
+assertContrast(color.onActionMuted, color.green, AA, 'secondary copy on green button');
 assertContrast(color.onAction, color.greenPressed, AA, 'white on pressed green');
 assertContrast(color.onAction, color.red, AA, 'white on red button');
 assertContrast(color.onAction, color.amber, AA, 'white on amber button');
@@ -178,6 +176,14 @@ console.log('TEST: touch and motion are usable');
 console.log('========================================');
 
 check(touch.minTarget >= 44, 'minimum touch target is at least 44pt');
+check(control.compact >= touch.minTarget, 'compact controls keep the minimum touch target');
+check(control.input >= touch.minTarget, 'inputs keep the minimum touch target');
+check(control.button >= touch.minTarget, 'buttons keep the minimum touch target');
+check(border.selected > border.hairline, 'selected controls are stronger than resting controls');
+check(border.focus >= 2, 'keyboard focus is visible');
+check(icon.sm < icon.md && icon.md < icon.lg && icon.lg < icon.xl, 'icon sizes form a coherent scale');
+check(state.disabledOpacity >= 0.4, 'disabled controls remain recognisable');
+check(numeric.fontVariant.includes('tabular-nums'), 'money uses stable-width numerals');
 check(
   motion.fast >= 150 && motion.slow <= 300,
   'motion stays in the 150-300ms band: faster reads as a glitch, slower feels sluggish'

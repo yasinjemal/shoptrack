@@ -13,6 +13,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   AppState,
+  BackHandler,
+  Platform,
   Text,
   View,
   TouchableOpacity,
@@ -44,8 +46,7 @@ import {
   loadMovements,
   loadProducts,
   loadSalesEntries,
-  normaliseBackup,
-  restoreBackup,
+  parseBackupText,
   setSetting,
   toCoreProduct,
   undoCountSession,
@@ -78,9 +79,16 @@ import {
 import { OwnerGateScreen } from '../ui/owner/OwnerGateScreen';
 import { styles } from '../ui/styles';
 import { color } from '../ui/theme';
+import {
+  photoBackupMediaAdapter,
+  recoverInterruptedPhotoRestore,
+} from '../media/photoBackupAdapter';
+import { sweepOrphanedPhotos } from '../media/photoMaintenance';
 import { getStrings, isLanguage, type Language } from '../i18n';
 import type { Screen } from '../ui/screens';
+import { getHardwareBackTarget, runHardwareBackOverride } from '../ui/navigation';
 import { HomeScreen, type RestockItem } from '../ui/home/HomeScreen';
+import { ScreenHeader } from '../ui/components/ScreenHeader';
 import { ProductsListScreen } from '../ui/products/ProductsListScreen';
 import { AddProductScreen } from '../ui/products/AddProductScreen';
 import { EditProductScreen } from '../ui/products/EditProductScreen';
@@ -97,10 +105,15 @@ import {
   ensureDailyBackup,
   flushPendingCrash,
   installGlobalCrashCapture,
+  isAutomaticCloudBackupOptedIn,
   LAST_SHARED_BACKUP_SETTING,
   lastSharedBackupAt,
+  restoreBackupWithSafetySnapshot,
+  scheduleAutomaticCloudBackup,
+  undoRestoreFromSafetySnapshot,
 } from './dataSafety';
 import { isSharedBackupDue } from '../core/safety';
+import { buildBackupPreview } from '../core/backupPreview';
 import { initPrivacySafeCrashReporting } from './telemetry';
 import { refreshActivationMetric } from './activation';
 import {
@@ -111,6 +124,18 @@ import {
 import { SettingsScreen } from '../ui/settings/SettingsScreen';
 import { HealthReportScreen } from '../ui/reports/HealthReportScreen';
 import { captureInitialPartnerReferral } from './partnerAttribution';
+import { HttpCloudBackupStore } from '../net/cloudBackup';
+import { renderBackupPreviewMessage } from '../ui/backupPreviewMessage';
+import {
+  canUsePlusFeature,
+  FREE_ENTITLEMENT_STATE,
+  type EntitlementState,
+} from '../core/entitlements';
+
+const automaticCloudBackupUrl = process.env.EXPO_PUBLIC_CLOUD_BACKUP_URL;
+const automaticCloudBackupStore = automaticCloudBackupUrl
+  ? new HttpCloudBackupStore(automaticCloudBackupUrl)
+  : null;
 
 // ============================================
 // DATABASE SETUP
@@ -199,7 +224,12 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 // MAIN APP COMPONENT
 // ============================================
 
-export default function App() {
+export function ShopTrackApp({
+  entitlementState = FREE_ENTITLEMENT_STATE,
+}: {
+  /** Future billing/account adapters inject their normalized result here. */
+  entitlementState?: EntitlementState;
+}) {
   const [screen, setScreen] = useState<Screen>('home');
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
@@ -210,7 +240,7 @@ export default function App() {
   const [restockPriority, setRestockPriority] = useState<RestockItem[]>([]);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [credit, setCredit] = useState<CreditSummary | null>(null);
-  const [expenses, setExpenses] = useState<ExpenseSummary | null>(null);
+  const [, setExpenses] = useState<ExpenseSummary | null>(null);
   const [lastCashUp, setLastCashUp] = useState<CashUp | null>(null);
   const [sales, setSales] = useState<SalesHistory | null>(null);
   const [dbError, setDbError] = useState<string | null>(null);
@@ -236,6 +266,23 @@ export default function App() {
     });
     return () => subscription.remove();
   }, []);
+
+  // Keep Android's system Back behavior aligned with every visible header.
+  // Returning false on Home deliberately hands the event back to Android so
+  // the normal app-exit behavior remains available there.
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (runHardwareBackOverride()) return true;
+      const target = getHardwareBackTarget(screen, products.length > 0);
+      if (target == null) return false;
+      setScreen(target);
+      return true;
+    });
+
+    return () => subscription.remove();
+  }, [screen, products.length]);
 
   // Load the stored profile into the module (for the share renderer) and the
   // React copy (for the home header). Runs at init and after every restore --
@@ -265,6 +312,23 @@ export default function App() {
     setShopName(clean.shop_name);
     await setSetting(db, SHOP_NAME_SETTING_KEY, clean.shop_name ?? '');
     await setSetting(db, SHOP_PHONE_SETTING_KEY, clean.shop_phone ?? '');
+  };
+
+  const refreshAfterRestore = async () => {
+    const country = setCurrentCountryPack(await getSetting(db, COUNTRY_PACK_SETTING_KEY));
+    setCountryPackCode(country.code);
+    const currency = setCurrentCurrency(
+      (await getSetting(db, CURRENCY_SETTING_KEY)) ?? country.currency
+    );
+    setCurrencyCode(currency.code as CurrencyCode);
+    await applyStoredShopProfile();
+    await Promise.all([
+      refreshProducts(),
+      refreshCredit(),
+      refreshExpenses(),
+      refreshCashUp(),
+      refreshSales(),
+    ]);
   };
 
   const changeLanguage = async (newLang: Language) => {
@@ -363,6 +427,11 @@ export default function App() {
 
       db = await openDatabase();
       await initDatabase(db);
+      await recoverInterruptedPhotoRestore(db);
+      const photoMaintenance = await sweepOrphanedPhotos(db);
+      if (photoMaintenance.failed > 0 || photoMaintenance.missingReferenced.length > 0) {
+        console.warn('Photo maintenance found incomplete media:', photoMaintenance);
+      }
       await captureInitialPartnerReferral(db);
       setCrashNotice((await flushPendingCrash(db)) != null);
       const country = setCurrentCountryPack(await getSetting(db, COUNTRY_PACK_SETTING_KEY));
@@ -374,7 +443,14 @@ export default function App() {
       await applyStoredShopProfile();
       setSharedBackupDue(isSharedBackupDue(await lastSharedBackupAt(db)));
       try {
-      await ensureDailyBackup(db);
+        const dailyBackup = await ensureDailyBackup(db);
+        const automaticCloudBackupOptedIn = await isAutomaticCloudBackupOptedIn();
+        scheduleAutomaticCloudBackup(db, {
+          optedIn: automaticCloudBackupOptedIn,
+          entitled: canUsePlusFeature('automatic_cloud_backup', entitlementState),
+          store: automaticCloudBackupStore,
+          newSnapshot: dailyBackup.created,
+        });
       } catch (error) {
         console.error('Auto-backup error:', error);
       }
@@ -394,7 +470,14 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [refreshProducts, refreshCredit, refreshExpenses, refreshCashUp, refreshSales]);
+  }, [
+    entitlementState,
+    refreshProducts,
+    refreshCredit,
+    refreshExpenses,
+    refreshCashUp,
+    refreshSales,
+  ]);
 
   useEffect(() => {
     init();
@@ -522,7 +605,14 @@ export default function App() {
 
   const handleBackup = async () => {
     try {
-      const backup = await createBackup(db);
+      // A WhatsApp/Drive JSON is not encrypted. Customer/ID photos therefore
+      // stay on the phone; private daily snapshots and encrypted cloud uploads
+      // use the default full export and preserve them.
+      const backup = await createBackup(
+        db,
+        photoBackupMediaAdapter,
+        { includeCustomerPhotos: false }
+      );
 
       // Named after the shop so the file is findable in a WhatsApp chat full
       // of backups: "nomsas-shop-backup-2026-07-18.json".
@@ -543,7 +633,10 @@ export default function App() {
         const sharedAt = Date.now();
         await setSetting(db, LAST_SHARED_BACKUP_SETTING, String(sharedAt), sharedAt);
         setSharedBackupDue(false);
-        Alert.alert(strings.BACKUP_SAVED, strings.BACKUP_HINT);
+        Alert.alert(
+          strings.BACKUP_SAVED,
+          `${strings.BACKUP_HINT}\n\n${strings.BACKUP_CUSTOMER_PHOTOS_EXCLUDED}`
+        );
       } else {
         Alert.alert(strings.ERROR_TITLE, strings.SHARING_UNAVAILABLE);
       }
@@ -556,7 +649,10 @@ export default function App() {
   const handleRestore = async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: 'application/json',
+        // WhatsApp, Drive and some Android download managers label JSON files
+        // as text/plain or application/octet-stream. Validate the contents
+        // ourselves instead of hiding a genuine backup behind a MIME filter.
+        type: '*/*',
         copyToCacheDirectory: true,
       });
 
@@ -569,16 +665,21 @@ export default function App() {
       const content = await restoreFile.text();
       let backup;
       try {
-        backup = normaliseBackup(JSON.parse(content));
-      } catch {
+        backup = parseBackupText(content);
+      } catch (error) {
+        console.error('Backup validation error:', error);
         Alert.alert(strings.RESTORE_INVALID, strings.RESTORE_INVALID_HINT);
         return;
       }
+      const backupPreviewMessage = renderBackupPreviewMessage(
+        buildBackupPreview(backup),
+        strings
+      );
 
       // Confirm restore
       Alert.alert(
         strings.RESTORE_CONFIRM,
-        strings.RESTORE_CONFIRM_HINT,
+        `${strings.RESTORE_CONFIRM_HINT}\n\n${backupPreviewMessage}`,
         [
           { text: strings.CANCEL, style: 'cancel' },
           {
@@ -586,23 +687,24 @@ export default function App() {
             style: 'destructive',
             onPress: async () => {
               try {
-                await restoreBackup(db, backup);
-                const country = setCurrentCountryPack(await getSetting(db, COUNTRY_PACK_SETTING_KEY));
-                setCountryPackCode(country.code);
-                const currency = setCurrentCurrency(
-                  (await getSetting(db, CURRENCY_SETTING_KEY)) ?? country.currency
-                );
-                setCurrencyCode(currency.code as CurrencyCode);
-                await applyStoredShopProfile();
-                await Promise.all([
-                  refreshProducts(),
-                  refreshCredit(),
-                  refreshExpenses(),
-                  refreshCashUp(),
-                  refreshSales(),
+                const snapshotUri = await restoreBackupWithSafetySnapshot(db, backup);
+                await refreshAfterRestore();
+                Alert.alert(strings.RESTORE_DONE, strings.RESTORE_DONE_HINT, [
+                  {
+                    text: strings.RESTORE_UNDO_ACTION,
+                    onPress: async () => {
+                      try {
+                        await undoRestoreFromSafetySnapshot(db, snapshotUri);
+                        await refreshAfterRestore();
+                        Alert.alert(strings.RESTORE_UNDO_DONE);
+                      } catch (error) {
+                        console.error('Restore undo error:', error);
+                        Alert.alert(strings.ERROR_TITLE, strings.ERROR_RESTORE);
+                      }
+                    },
+                  },
+                  { text: strings.DONE },
                 ]);
-
-                Alert.alert(strings.RESTORE_DONE, strings.RESTORE_DONE_HINT);
               } catch (error) {
                 console.error('Restore error:', error);
                 Alert.alert(strings.ERROR_TITLE, strings.ERROR_RESTORE);
@@ -623,7 +725,7 @@ export default function App() {
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#4CAF50" />
+        <ActivityIndicator size="large" color={color.green} />
         <Text style={styles.loadingText}>{strings.STARTING_APP}</Text>
       </View>
     );
@@ -666,11 +768,14 @@ export default function App() {
 
   // The owner gate stands in front of every money screen while locked:
   // expenses, the sales book, weekly profit, activity (per-product profit),
-  // and the health report. The worker's screens -- count, stock-in, credit,
-  // cash-up, products, today's takings -- are never gated.
+  // the health report, and Settings (which exposes recovery phrases and data
+  // replacement). Home also hides backup/share actions while locked. The
+  // worker's screens -- count, stock-in, credit, cash-up, products, today's
+  // takings -- remain available.
   const gatedScreen =
     screen === 'expenses' || screen === 'sales' || screen === 'weekly' ||
-    screen === 'activity' || screen === 'health' || screen === 'owner_unlock';
+    screen === 'activity' || screen === 'health' || screen === 'settings' ||
+    screen === 'owner_unlock';
   if (gatedScreen && ownerLocked) {
     return (
       <OwnerGateScreen
@@ -721,24 +826,18 @@ export default function App() {
         language={lang}
         currency={currencyCode}
         countryPack={countryPackCode}
+        remoteViewerEntitled={canUsePlusFeature('remote_viewer', entitlementState)}
+        automaticCloudBackupEntitled={canUsePlusFeature(
+          'automatic_cloud_backup',
+          entitlementState
+        )}
         onBack={() => setScreen('home')}
         onLanguageChange={changeLanguage}
         onCurrencyChange={changeCurrency}
         onCountryPackChange={changeCountryPack}
         onShopProfileChange={changeShopProfile}
         onOwnerPinChange={changeOwnerPin}
-        onDataRestored={async () => {
-          const country = setCurrentCountryPack(await getSetting(db, COUNTRY_PACK_SETTING_KEY));
-          setCountryPackCode(country.code);
-          const currency = setCurrentCurrency(
-            (await getSetting(db, CURRENCY_SETTING_KEY)) ?? country.currency
-          );
-          setCurrencyCode(currency.code as CurrencyCode);
-          await applyStoredShopProfile();
-          await Promise.all([
-            refreshProducts(), refreshCredit(), refreshExpenses(), refreshCashUp(), refreshSales(),
-          ]);
-        }}
+        onDataRestored={refreshAfterRestore}
       />
     );
   }
@@ -864,17 +963,13 @@ export default function App() {
       return (
         <SafeAreaView style={styles.container}>
           <StatusBar style="dark" />
-          <View style={styles.screenHeader}>
-            <TouchableOpacity onPress={() => setScreen('home')}>
-              <Text style={styles.backButton}>{strings.BACK}</Text>
-            </TouchableOpacity>
-            <Text style={styles.screenTitle}>{strings.COUNT_STOCK}</Text>
-            <View style={{ width: 50 }} />
-          </View>
+          <ScreenHeader title={strings.COUNT_STOCK} leftLabel={strings.BACK} onLeft={() => setScreen('home')} />
           <View style={styles.emptyState}>
             <Text style={styles.emptyStateText}>{strings.ADD_PRODUCTS_FIRST}</Text>
             <TouchableOpacity
               style={styles.emptyStateButton}
+              accessibilityRole="button"
+              accessibilityLabel={strings.ADD_PRODUCT}
               onPress={() => setScreen('add_product')}
             >
               <Text style={styles.emptyStateButtonText}>{strings.ADD_PRODUCT}</Text>
@@ -908,17 +1003,13 @@ export default function App() {
       return (
         <SafeAreaView style={styles.container}>
           <StatusBar style="dark" />
-          <View style={styles.screenHeader}>
-            <TouchableOpacity onPress={() => setScreen('home')}>
-              <Text style={styles.backButton}>{strings.BACK}</Text>
-            </TouchableOpacity>
-            <Text style={styles.screenTitle}>{strings.ADD_STOCK}</Text>
-            <View style={{ width: 50 }} />
-          </View>
+          <ScreenHeader title={strings.ADD_STOCK} leftLabel={strings.BACK} onLeft={() => setScreen('home')} />
           <View style={styles.emptyState}>
             <Text style={styles.emptyStateText}>{strings.ADD_PRODUCTS_FIRST}</Text>
             <TouchableOpacity
               style={styles.emptyStateButton}
+              accessibilityRole="button"
+              accessibilityLabel={strings.ADD_PRODUCT}
               onPress={() => setScreen('add_product')}
             >
               <Text style={styles.emptyStateButtonText}>{strings.ADD_PRODUCT}</Text>
@@ -965,4 +1056,9 @@ export default function App() {
   }
 
   return null;
+}
+
+/** Expo's registered root has no custom props; providers can render ShopTrackApp directly. */
+export default function App() {
+  return <ShopTrackApp entitlementState={FREE_ENTITLEMENT_STATE} />;
 }

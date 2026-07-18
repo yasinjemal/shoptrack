@@ -10,12 +10,14 @@
  */
 
 import type { SQLiteDatabase } from 'expo-sqlite';
+import { base64 } from '@scure/base';
 import type { Product as CoreProduct, StockMovement } from './calculations';
 import { PAYMENT_METHODS, type CreditEntry, type Customer, type PaymentMethod } from './credit';
 import type { Expense, ExpenseCategory } from './expenses';
 import type { CashUpResult } from './cashup';
 import type { SalesEntry, SalesPeriod } from './sales';
 import { SCHEMA_VERSION } from './schema';
+import { isManagedJpegBytes, parseManagedPhotoPath, type PhotoPurpose } from './photo';
 
 function requireNonNegativeInteger(value: number, label: string): void {
   if (!Number.isInteger(value) || value < 0) {
@@ -45,6 +47,8 @@ export interface AppProduct {
   id: number;
   name: string;
   barcode?: string | null;
+  /** Logical, app-owned path. The file layer resolves it under ShopTrack media. */
+  photo_path?: string | null;
   unit_label: string;
   buy_price: number | null;
   sell_price: number | null;
@@ -101,6 +105,7 @@ export async function addProduct(
   details: {
     name: string;
     barcode?: string | null;
+    photoPath?: string | null;
     buyPrice?: number | null;
     sellPrice?: number | null;
     quantity?: number;
@@ -110,6 +115,7 @@ export async function addProduct(
   const name = details.name.trim();
   if (!name) throw new Error('Product name is required.');
   const barcode = details.barcode?.trim() || null;
+  const photoPath = nullableMediaPath(details.photoPath, 'Product photo path', 'product');
   const quantity = details.quantity ?? 0;
   requireNonNegativeInteger(quantity, 'Current stock');
   requireOptionalNonNegativeNumber(details.buyPrice, 'Buy price');
@@ -117,10 +123,12 @@ export async function addProduct(
 
   let productId = 0;
   await db.withTransactionAsync(async () => {
+    await assertMediaPathAvailable(db, photoPath);
     const result = await db.runAsync(
-      `INSERT INTO products (name, barcode, buy_price, sell_price, current_qty, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [name, barcode, details.buyPrice ?? null, details.sellPrice ?? null, quantity, now, now]
+      `INSERT INTO products
+         (name, barcode, photo_path, buy_price, sell_price, current_qty, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [name, barcode, photoPath, details.buyPrice ?? null, details.sellPrice ?? null, quantity, now, now]
     );
     productId = result.lastInsertRowId;
 
@@ -138,7 +146,13 @@ export async function addProduct(
 export async function updateProduct(
   db: SQLiteDatabase,
   productId: number,
-  details: { name: string; barcode?: string | null; buyPrice?: number | null; sellPrice?: number | null },
+  details: {
+    name: string;
+    barcode?: string | null;
+    photoPath?: string | null;
+    buyPrice?: number | null;
+    sellPrice?: number | null;
+  },
   now: number = Date.now()
 ): Promise<void> {
   const name = details.name.trim();
@@ -146,10 +160,28 @@ export async function updateProduct(
   requireOptionalNonNegativeNumber(details.buyPrice, 'Buy price');
   requireOptionalNonNegativeNumber(details.sellPrice, 'Sell price');
   const barcode = details.barcode?.trim() || null;
-  await db.runAsync(
-    'UPDATE products SET name = ?, barcode = ?, buy_price = ?, sell_price = ?, updated_at = ? WHERE id = ?',
-    [name, barcode, details.buyPrice ?? null, details.sellPrice ?? null, now, productId]
-  );
+  const photoPath = nullableMediaPath(details.photoPath, 'Product photo path', 'product');
+  const shouldUpdatePhoto = details.photoPath !== undefined ? 1 : 0;
+  await db.withTransactionAsync(async () => {
+    if (shouldUpdatePhoto) await assertMediaPathAvailable(db, photoPath, 'product', productId);
+    await db.runAsync(
+      `UPDATE products
+       SET name = ?, barcode = ?,
+           photo_path = CASE WHEN ? = 1 THEN ? ELSE photo_path END,
+           buy_price = ?, sell_price = ?, updated_at = ?
+       WHERE id = ?`,
+      [
+        name,
+        barcode,
+        shouldUpdatePhoto,
+        photoPath,
+        details.buyPrice ?? null,
+        details.sellPrice ?? null,
+        now,
+        productId,
+      ]
+    );
+  });
 }
 
 export async function findProductByBarcode(
@@ -164,15 +196,48 @@ export async function findProductByBarcode(
   );
 }
 
+/** Swap a product's logical photo reference and return the file it replaced. */
+export async function setProductPhotoPath(
+  db: SQLiteDatabase,
+  productId: number,
+  photoPath: string | null,
+  now: number = Date.now()
+): Promise<string | null> {
+  const nextPath = nullableMediaPath(photoPath, 'Product photo path', 'product');
+  let previousPath: string | null = null;
+  await db.withTransactionAsync(async () => {
+    await assertMediaPathAvailable(db, nextPath, 'product', productId);
+    const row = await db.getFirstAsync<{ photo_path: string | null }>(
+      'SELECT photo_path FROM products WHERE id = ?',
+      [productId]
+    );
+    previousPath = row?.photo_path ?? null;
+    await db.runAsync(
+      'UPDATE products SET photo_path = ?, updated_at = ? WHERE id = ?',
+      [nextPath, now, productId]
+    );
+  });
+  return previousPath;
+}
+
 export async function deactivateProduct(
   db: SQLiteDatabase,
   productId: number,
   now: number = Date.now()
-): Promise<void> {
-  await db.runAsync(
-    'UPDATE products SET is_active = 0, updated_at = ? WHERE id = ?',
-    [now, productId]
-  );
+): Promise<string | null> {
+  let previousPath: string | null = null;
+  await db.withTransactionAsync(async () => {
+    const row = await db.getFirstAsync<{ photo_path: string | null }>(
+      'SELECT photo_path FROM products WHERE id = ?',
+      [productId]
+    );
+    previousPath = row?.photo_path ?? null;
+    await db.runAsync(
+      'UPDATE products SET is_active = 0, photo_path = NULL, updated_at = ? WHERE id = ?',
+      [now, productId]
+    );
+  });
+  return previousPath;
 }
 
 /**
@@ -363,7 +428,10 @@ interface CustomerRow {
   id: number;
   name: string;
   phone: string | null;
+  photo_path: string | null;
 }
+
+export type AppCustomer = Customer & { photo_path: string | null };
 
 interface CreditEntryRow {
   id: number;
@@ -376,14 +444,15 @@ interface CreditEntryRow {
   recorded_at: number;
 }
 
-export async function loadCustomers(db: SQLiteDatabase): Promise<Customer[]> {
+export async function loadCustomers(db: SQLiteDatabase): Promise<AppCustomer[]> {
   const rows = await db.getAllAsync<CustomerRow>(
-    'SELECT id, name, phone FROM customers WHERE is_active = 1 ORDER BY name'
+    'SELECT id, name, phone, photo_path FROM customers WHERE is_active = 1 ORDER BY name'
   );
   return rows.map(r => ({
     id: r.id,
     name: r.name,
     phone: r.phone ?? undefined,
+    photo_path: r.photo_path ?? null,
   }));
 }
 
@@ -413,13 +482,41 @@ export async function addCustomer(
   db: SQLiteDatabase,
   name: string,
   phone: string | null = null,
-  now: number = Date.now()
+  now: number = Date.now(),
+  photoPath: string | null = null
 ): Promise<number> {
+  const cleanPhotoPath = nullableMediaPath(photoPath, 'Customer photo path', 'customer');
+  await assertMediaPathAvailable(db, cleanPhotoPath);
   const result = await db.runAsync(
-    'INSERT INTO customers (name, phone, created_at, updated_at) VALUES (?, ?, ?, ?)',
-    [name.trim(), phone?.trim() || null, now, now]
+    `INSERT INTO customers (name, phone, photo_path, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    [name.trim(), phone?.trim() || null, cleanPhotoPath, now, now]
   );
   return result.lastInsertRowId;
+}
+
+/** Swap a customer's logical photo reference and return the file it replaced. */
+export async function setCustomerPhotoPath(
+  db: SQLiteDatabase,
+  customerId: number,
+  photoPath: string | null,
+  now: number = Date.now()
+): Promise<string | null> {
+  const nextPath = nullableMediaPath(photoPath, 'Customer photo path', 'customer');
+  let previousPath: string | null = null;
+  await db.withTransactionAsync(async () => {
+    await assertMediaPathAvailable(db, nextPath, 'customer', customerId);
+    const row = await db.getFirstAsync<{ photo_path: string | null }>(
+      'SELECT photo_path FROM customers WHERE id = ?',
+      [customerId]
+    );
+    previousPath = row?.photo_path ?? null;
+    await db.runAsync(
+      'UPDATE customers SET photo_path = ?, updated_at = ? WHERE id = ?',
+      [nextPath, now, customerId]
+    );
+  });
+  return previousPath;
 }
 
 /**
@@ -486,7 +583,7 @@ async function writeCreditEntry(
  */
 export async function addCustomerToBook(
   db: SQLiteDatabase,
-  details: { name: string; phone?: string | null },
+  details: { name: string; phone?: string | null; photoPath?: string | null },
   openingCredit?: { amount: number; notes?: string | null; dueAt?: number | null },
   now: number = Date.now()
 ): Promise<number> {
@@ -494,7 +591,13 @@ export async function addCustomerToBook(
   if (openingCredit) requirePositiveNumber(openingCredit.amount, 'Credit amount');
   let customerId = 0;
   await db.withTransactionAsync(async () => {
-    customerId = await addCustomer(db, details.name, details.phone ?? null, now);
+    customerId = await addCustomer(
+      db,
+      details.name,
+      details.phone ?? null,
+      now,
+      details.photoPath ?? null
+    );
 
     if (openingCredit) {
       await writeCreditEntry(
@@ -514,17 +617,46 @@ export async function addCustomerToBook(
 /**
  * Hide a customer without deleting their history.
  *
- * Their entries stay in the ledger, so past totals never silently change.
+ * Their entries stay in the ledger, so past totals never silently change. A
+ * customer can leave the active book only when their cent-rounded balance is
+ * exactly zero; outstanding debt and overpayment must remain visible.
  */
 export async function deactivateCustomer(
   db: SQLiteDatabase,
   customerId: number,
   now: number = Date.now()
-): Promise<void> {
-  await db.runAsync(
-    'UPDATE customers SET is_active = 0, updated_at = ? WHERE id = ?',
-    [now, customerId]
-  );
+): Promise<string | null> {
+  let previousPath: string | null = null;
+  await db.withTransactionAsync(async () => {
+    const row = await db.getFirstAsync<{ photo_path: string | null; balance: number }>(
+      `SELECT c.photo_path,
+              ROUND(COALESCE(SUM(
+                CASE
+                  WHEN e.type = 'CREDIT' THEN e.amount
+                  WHEN e.type = 'PAYMENT' THEN -e.amount
+                  ELSE 0
+                END
+              ), 0), 2) AS balance
+       FROM customers c
+       LEFT JOIN credit_entries e ON e.customer_id = c.id
+       WHERE c.id = ? AND c.is_active = 1
+       GROUP BY c.id, c.photo_path`,
+      [customerId]
+    );
+    if (!row) throw new Error('Active customer not found.');
+    // A customer with debt (or change owed to them) must never disappear from
+    // the working book. Keep this invariant below the UI so every caller is
+    // protected, including future import/admin paths.
+    if (!Number.isFinite(row.balance) || row.balance !== 0) {
+      throw new Error('Customer balance must be exactly zero before deactivation.');
+    }
+    previousPath = row.photo_path ?? null;
+    await db.runAsync(
+      'UPDATE customers SET is_active = 0, photo_path = NULL, updated_at = ? WHERE id = ?',
+      [now, customerId]
+    );
+  });
+  return previousPath;
 }
 
 // ============================================
@@ -536,8 +668,11 @@ interface ExpenseRow {
   category: ExpenseCategory;
   amount: number;
   notes: string | null;
+  receipt_photo_path: string | null;
   recorded_at: number;
 }
+
+export type AppExpense = Expense & { receipt_photo_path: string | null };
 
 /**
  * Load expenses, newest first.
@@ -549,15 +684,15 @@ interface ExpenseRow {
 export async function loadExpenses(
   db: SQLiteDatabase,
   since?: number
-): Promise<Expense[]> {
+): Promise<AppExpense[]> {
   const rows = since != null
     ? await db.getAllAsync<ExpenseRow>(
-        `SELECT id, category, amount, notes, recorded_at FROM expenses
+        `SELECT id, category, amount, notes, receipt_photo_path, recorded_at FROM expenses
          WHERE recorded_at >= ? ORDER BY recorded_at DESC`,
         [since]
       )
     : await db.getAllAsync<ExpenseRow>(
-        `SELECT id, category, amount, notes, recorded_at FROM expenses
+        `SELECT id, category, amount, notes, receipt_photo_path, recorded_at FROM expenses
          ORDER BY recorded_at DESC`
       );
 
@@ -566,6 +701,7 @@ export async function loadExpenses(
     category: r.category,
     amount: r.amount,
     notes: r.notes ?? undefined,
+    receipt_photo_path: r.receipt_photo_path ?? null,
     recorded_at: r.recorded_at,
   }));
 }
@@ -581,13 +717,40 @@ export async function recordExpense(
   category: ExpenseCategory,
   amount: number,
   notes: string | null = null,
-  now: number = Date.now()
+  now: number = Date.now(),
+  receiptPhotoPath: string | null = null
 ): Promise<number> {
+  const cleanPhotoPath = nullableMediaPath(receiptPhotoPath, 'Receipt photo path', 'receipt');
+  await assertMediaPathAvailable(db, cleanPhotoPath);
   const result = await db.runAsync(
-    `INSERT INTO expenses (category, amount, notes, recorded_at) VALUES (?, ?, ?, ?)`,
-    [category, amount, notes?.trim() || null, now]
+    `INSERT INTO expenses (category, amount, notes, receipt_photo_path, recorded_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    [category, amount, notes?.trim() || null, cleanPhotoPath, now]
   );
   return result.lastInsertRowId;
+}
+
+/** Swap an expense's receipt reference and return the file it replaced. */
+export async function setExpenseReceiptPhotoPath(
+  db: SQLiteDatabase,
+  expenseId: number,
+  photoPath: string | null
+): Promise<string | null> {
+  const nextPath = nullableMediaPath(photoPath, 'Receipt photo path', 'receipt');
+  let previousPath: string | null = null;
+  await db.withTransactionAsync(async () => {
+    await assertMediaPathAvailable(db, nextPath, 'receipt', expenseId);
+    const row = await db.getFirstAsync<{ receipt_photo_path: string | null }>(
+      'SELECT receipt_photo_path FROM expenses WHERE id = ?',
+      [expenseId]
+    );
+    previousPath = row?.receipt_photo_path ?? null;
+    await db.runAsync(
+      'UPDATE expenses SET receipt_photo_path = ? WHERE id = ?',
+      [nextPath, expenseId]
+    );
+  });
+  return previousPath;
 }
 
 /**
@@ -599,8 +762,17 @@ export async function recordExpense(
  * they paid; a typo there is noise, and leaving a reversal pair in the list
  * would make the screen harder to read than the mistake it fixes.
  */
-export async function deleteExpense(db: SQLiteDatabase, expenseId: number): Promise<void> {
-  await db.runAsync('DELETE FROM expenses WHERE id = ?', [expenseId]);
+export async function deleteExpense(db: SQLiteDatabase, expenseId: number): Promise<string | null> {
+  let previousPath: string | null = null;
+  await db.withTransactionAsync(async () => {
+    const row = await db.getFirstAsync<{ receipt_photo_path: string | null }>(
+      'SELECT receipt_photo_path FROM expenses WHERE id = ?',
+      [expenseId]
+    );
+    previousPath = row?.receipt_photo_path ?? null;
+    await db.runAsync('DELETE FROM expenses WHERE id = ?', [expenseId]);
+  });
+  return previousPath;
 }
 
 // ============================================
@@ -1136,12 +1308,49 @@ export async function findStaffByPin(
  *   4 - payment methods and digital takings
  *   5 - staff and recorded_by attribution
  *   6 - optional product barcodes
+ *   7 - logical product/customer/receipt photo references plus embedded media
  *
  * Keeping these steps explicit matters when an old phone is restored straight
  * onto a current install. Missing nullable fields must become null; values from
  * a newer in-memory object must never leak into an older declared format.
  */
-export const BACKUP_FORMAT_VERSION = 6;
+export const BACKUP_FORMAT_VERSION = 7;
+export const MEDIA_RESTORE_TOKEN_SETTING = '__shoptrack_media_restore_token_v1';
+
+export interface BackupMediaAsset {
+  /** Relative path under ShopTrack's app-owned media root. */
+  path: string;
+  mime_type: 'image/jpeg';
+  /** Canonical, unwrapped base64. JSON carries no device-specific file URI. */
+  base64: string;
+}
+
+/** File-system seam used while exporting. Expo APIs belong in the UI adapter. */
+export interface BackupMediaReader {
+  readMedia(path: string): Promise<{ mime_type: string; base64: string }>;
+}
+
+/**
+ * A staged restore remains reversible until the surrounding SQL write succeeds.
+ * `commit` activates the complete replacement media set (and removes files
+ * absent from it); `rollback` must undo either a staged or committed swap.
+ */
+export interface StagedMediaRestore {
+  /** Durable token written into SQLite in the same transaction as restored rows. */
+  recoveryToken?: string;
+  commit(): Promise<void>;
+  rollback(): Promise<void>;
+  /** Delete the rollback snapshot after SQLite has committed successfully. */
+  finalize(): Promise<void>;
+}
+
+/**
+ * File-system seam used while restoring. `assets` is the complete desired
+ * media root, not a patch. Core code stays runnable in Node.
+ */
+export interface RestoreMediaAdapter {
+  stageRestore(assets: readonly BackupMediaAsset[]): Promise<StagedMediaRestore>;
+}
 
 export interface ShopTrackBackupData {
   products: any[];
@@ -1154,6 +1363,7 @@ export interface ShopTrackBackupData {
   sales_entries: any[];
   settings: any[];
   staff_members: any[];
+  media: BackupMediaAsset[];
 }
 
 export interface ShopTrackBackup {
@@ -1164,20 +1374,47 @@ export interface ShopTrackBackup {
   data: ShopTrackBackupData;
 }
 
-export async function createBackup(db: SQLiteDatabase): Promise<ShopTrackBackup> {
+export interface BackupExportOptions {
+  /**
+   * Private on-device snapshots and encrypted envelopes keep customer photos.
+   * Plain files shared through other apps set this false so an ID image never
+   * silently leaves the phone without encryption.
+   */
+  includeCustomerPhotos?: boolean;
+}
+
+export async function createBackup(
+  db: SQLiteDatabase,
+  mediaReader?: BackupMediaReader,
+  options: BackupExportOptions = {}
+): Promise<ShopTrackBackup> {
+  type BackupRow = Record<string, any>;
   const [products, stockMovements, countSessions, customers, creditEntries, expenses, cashUps, salesEntries, settings, staffMembers] =
     await Promise.all([
-      db.getAllAsync('SELECT * FROM products ORDER BY id'),
-      db.getAllAsync('SELECT * FROM stock_movements ORDER BY id'),
-      db.getAllAsync('SELECT * FROM count_sessions ORDER BY id'),
-      db.getAllAsync('SELECT * FROM customers ORDER BY id'),
-      db.getAllAsync('SELECT * FROM credit_entries ORDER BY id'),
-      db.getAllAsync('SELECT * FROM expenses ORDER BY id'),
-      db.getAllAsync('SELECT * FROM cash_ups ORDER BY id'),
-      db.getAllAsync('SELECT * FROM sales_entries ORDER BY id'),
-      db.getAllAsync('SELECT * FROM settings ORDER BY key'),
-      db.getAllAsync('SELECT * FROM staff_members ORDER BY id'),
+      db.getAllAsync<BackupRow>('SELECT * FROM products ORDER BY id'),
+      db.getAllAsync<BackupRow>('SELECT * FROM stock_movements ORDER BY id'),
+      db.getAllAsync<BackupRow>('SELECT * FROM count_sessions ORDER BY id'),
+      db.getAllAsync<BackupRow>('SELECT * FROM customers ORDER BY id'),
+      db.getAllAsync<BackupRow>('SELECT * FROM credit_entries ORDER BY id'),
+      db.getAllAsync<BackupRow>('SELECT * FROM expenses ORDER BY id'),
+      db.getAllAsync<BackupRow>('SELECT * FROM cash_ups ORDER BY id'),
+      db.getAllAsync<BackupRow>('SELECT * FROM sales_entries ORDER BY id'),
+      db.getAllAsync<BackupRow>('SELECT * FROM settings ORDER BY key'),
+      db.getAllAsync<BackupRow>('SELECT * FROM staff_members ORDER BY id'),
     ]);
+
+  const exportedCustomers = options.includeCustomerPhotos === false
+    ? customers.map(customer => ({ ...customer, photo_path: null }))
+    : customers;
+  const referencedPaths = collectReferencedMediaPaths(products, exportedCustomers, expenses);
+  if (referencedPaths.length > 0 && !mediaReader) {
+    throw new Error('This shop has photos, so a media reader is required to create a complete backup.');
+  }
+  const media = await Promise.all(referencedPaths.map(async path => {
+    const content = await mediaReader!.readMedia(path);
+    if (!isRecord(content)) throw new Error(`Backup media ${path} could not be read.`);
+    return normaliseMediaAsset({ ...content, path });
+  }));
 
   return {
     shoptrack_backup: true,
@@ -1188,13 +1425,14 @@ export async function createBackup(db: SQLiteDatabase): Promise<ShopTrackBackup>
       products,
       stock_movements: stockMovements,
       count_sessions: countSessions,
-      customers,
+      customers: exportedCustomers,
       credit_entries: creditEntries,
       expenses,
       cash_ups: cashUps,
       sales_entries: salesEntries,
-      settings,
+      settings: settings.filter(setting => setting.key !== MEDIA_RESTORE_TOKEN_SETTING),
       staff_members: staffMembers,
+      media,
     },
   };
 }
@@ -1210,6 +1448,115 @@ function rows(value: unknown, name: string): any[] {
   return value;
 }
 
+const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
+/**
+ * Accept only portable, app-owned logical paths. In particular, neither a
+ * backup nor a compromised database may make the file adapter escape its root.
+ */
+function logicalMediaPath(
+  value: unknown,
+  label = 'Media path',
+  expectedPurpose?: PhotoPurpose
+): string {
+  const parsed = parseManagedPhotoPath(value);
+  if (!parsed) throw new Error(`${label} is not a ShopTrack-managed JPEG path.`);
+  if (expectedPurpose != null && parsed.purpose !== expectedPurpose) {
+    throw new Error(`${label} has the wrong photo purpose.`);
+  }
+  return parsed.path;
+}
+
+function nullableMediaPath(
+  value: unknown,
+  label: string,
+  expectedPurpose?: PhotoPurpose
+): string | null {
+  return value == null ? null : logicalMediaPath(value, label, expectedPurpose);
+}
+
+async function assertMediaPathAvailable(
+  db: SQLiteDatabase,
+  path: string | null,
+  allowedOwner?: PhotoPurpose,
+  allowedOwnerId?: number
+): Promise<void> {
+  if (path == null) return;
+  const owner = await db.getFirstAsync<{ owner: PhotoPurpose; id: number }>(
+    `SELECT 'product' AS owner, id FROM products WHERE photo_path = ?
+     UNION ALL
+     SELECT 'customer' AS owner, id FROM customers WHERE photo_path = ?
+     UNION ALL
+     SELECT 'receipt' AS owner, id FROM expenses WHERE receipt_photo_path = ?
+     LIMIT 1`,
+    [path, path, path]
+  );
+  if (!owner) return;
+  if (owner.owner === allowedOwner && owner.id === allowedOwnerId) return;
+  throw new Error(`Photo path is already owned by another record: ${path}`);
+}
+
+function normaliseMediaAsset(value: unknown): BackupMediaAsset {
+  if (!isRecord(value)) throw new Error('Backup media asset is invalid.');
+  const path = logicalMediaPath(value.path, 'Backup media path');
+  if (value.mime_type !== 'image/jpeg') {
+    throw new Error(`Backup media ${path} must be image/jpeg.`);
+  }
+  if (typeof value.base64 !== 'string' || value.base64.length === 0 || value.base64.length % 4 !== 0 || !BASE64.test(value.base64)) {
+    throw new Error(`Backup media ${path} has invalid base64.`);
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = base64.decode(value.base64);
+  } catch {
+    throw new Error(`Backup media ${path} has invalid base64.`);
+  }
+  if (!isManagedJpegBytes(bytes)) {
+    throw new Error(`Backup media ${path} is not a valid-sized JPEG.`);
+  }
+  return { path, mime_type: 'image/jpeg', base64: value.base64 };
+}
+
+function collectReferencedMediaPaths(products: any[], customers: any[], expenses: any[]): string[] {
+  const paths = new Set<string>();
+  const add = (path: string | null) => {
+    if (!path) return;
+    if (paths.has(path)) throw new Error(`Photo path is referenced by more than one record: ${path}`);
+    paths.add(path);
+  };
+  for (const product of products) {
+    const path = nullableMediaPath(product.photo_path, 'Product photo path', 'product');
+    add(path);
+  }
+  for (const customer of customers) {
+    const path = nullableMediaPath(customer.photo_path, 'Customer photo path', 'customer');
+    add(path);
+  }
+  for (const expense of expenses) {
+    const path = nullableMediaPath(expense.receipt_photo_path, 'Receipt photo path', 'receipt');
+    add(path);
+  }
+  return [...paths].sort();
+}
+
+function normaliseMediaAssets(value: unknown, referencedPaths: readonly string[]): BackupMediaAsset[] {
+  const assets = rows(value, 'media').map(normaliseMediaAsset);
+  const byPath = new Map<string, BackupMediaAsset>();
+  for (const asset of assets) {
+    if (byPath.has(asset.path)) throw new Error(`Backup media path is duplicated: ${asset.path}`);
+    byPath.set(asset.path, asset);
+  }
+
+  const referenced = new Set(referencedPaths);
+  for (const path of referencedPaths) {
+    if (!byPath.has(path)) throw new Error(`Backup is missing referenced media: ${path}`);
+  }
+  for (const path of byPath.keys()) {
+    if (!referenced.has(path)) throw new Error(`Backup contains unreferenced media: ${path}`);
+  }
+  return assets;
+}
+
 /**
  * Validate current backups and upgrade every older format. A backup's declared
  * format is authoritative: a format-1 object that happens to contain a newer
@@ -1223,7 +1570,15 @@ export function normaliseBackup(value: unknown): ShopTrackBackup {
 
   const declaredFormat = value.backup_format_version;
   const isVersioned = Number.isInteger(declaredFormat) && declaredFormat >= 1 && declaredFormat <= BACKUP_FORMAT_VERSION;
-  const isLegacy = value.backup_format_version == null && value.version === 5;
+  // Before backup formats were separated from database schemas, every export
+  // used `version: SCHEMA_VERSION`. ShopTrack shipped that exporter at schema
+  // versions 2, 3, 4 and 5. All four had the same three-table shape. Refusing
+  // versions 2-4 made a perfectly valid backup look like an unrelated file
+  // after the owner reinstalled a newer build.
+  const legacySchemaVersion = value.backup_format_version == null ? value.version : null;
+  const isLegacy = Number.isInteger(legacySchemaVersion)
+    && legacySchemaVersion >= 2
+    && legacySchemaVersion <= 5;
   if (!isVersioned && !isLegacy) {
     throw new Error('This backup format is not supported.');
   }
@@ -1231,6 +1586,34 @@ export function normaliseBackup(value: unknown): ShopTrackBackup {
   const sourceFormat = isLegacy ? 0 : Number(declaredFormat);
 
   const data = value.data;
+  const products = rows(data.products, 'products').map(product => ({
+    ...product,
+    barcode: sourceFormat >= 6 ? product.barcode ?? null : null,
+    photo_path: sourceFormat >= 7
+      ? nullableMediaPath(product.photo_path, 'Product photo path', 'product')
+      : null,
+  }));
+  const customers = isLegacy
+    ? []
+    : rows(data.customers, 'customers').map(customer => ({
+        ...customer,
+        photo_path: sourceFormat >= 7
+          ? nullableMediaPath(customer.photo_path, 'Customer photo path', 'customer')
+          : null,
+      }));
+  const expenses = isLegacy
+    ? []
+    : rows(data.expenses, 'expenses').map(expense => ({
+        ...expense,
+        receipt_photo_path: sourceFormat >= 7
+          ? nullableMediaPath(expense.receipt_photo_path, 'Receipt photo path', 'receipt')
+          : null,
+      }));
+  const referencedPaths = collectReferencedMediaPaths(products, customers, expenses);
+  const media = sourceFormat >= 7
+    ? normaliseMediaAssets(data.media, referencedPaths)
+    : [];
+
   return {
     shoptrack_backup: true,
     backup_format_version: BACKUP_FORMAT_VERSION,
@@ -1241,23 +1624,20 @@ export function normaliseBackup(value: unknown): ShopTrackBackup {
         : SCHEMA_VERSION,
     created_at: typeof value.created_at === 'string' ? value.created_at : new Date(0).toISOString(),
     data: {
-      products: rows(data.products, 'products').map(product => ({
-        ...product,
-        barcode: sourceFormat >= 6 ? product.barcode ?? null : null,
-      })),
+      products,
       stock_movements: rows(data.stock_movements, 'stock_movements'),
       count_sessions: rows(data.count_sessions, 'count_sessions').map(session => ({
         ...session,
         recorded_by: sourceFormat >= 5 ? session.recorded_by ?? null : null,
       })),
-      customers: isLegacy ? [] : rows(data.customers, 'customers'),
+      customers,
       credit_entries: isLegacy
         ? []
         : rows(data.credit_entries, 'credit_entries').map(entry => ({
             ...entry,
             payment_method: sourceFormat >= 4 ? entry.payment_method ?? null : null,
           })),
-      expenses: isLegacy ? [] : rows(data.expenses, 'expenses'),
+      expenses,
       cash_ups: isLegacy
         ? []
         : rows(data.cash_ups, 'cash_ups').map(cashUp => ({
@@ -1266,18 +1646,48 @@ export function normaliseBackup(value: unknown): ShopTrackBackup {
             recorded_by: sourceFormat >= 5 ? cashUp.recorded_by ?? null : null,
           })),
       sales_entries: sourceFormat >= 2 ? rows(data.sales_entries, 'sales_entries') : [],
-      settings: sourceFormat >= 3 ? rows(data.settings, 'settings') : [],
+      settings: sourceFormat >= 3
+        ? rows(data.settings, 'settings').filter(
+            setting => setting.key !== MEDIA_RESTORE_TOKEN_SETTING
+          )
+        : [],
       staff_members: sourceFormat >= 5 ? rows(data.staff_members, 'staff_members') : [],
+      media,
     },
   };
 }
 
-/** Replace every data set in a single transaction. */
-export async function restoreBackup(db: SQLiteDatabase, value: unknown): Promise<void> {
+/**
+ * Decode a backup selected through Android's document providers.
+ *
+ * Some file/download apps prepend a UTF-8 byte-order mark even though the
+ * JSON itself is unchanged. JSON.parse rejects that invisible character, so
+ * strip it (and surrounding whitespace) before validating the backup.
+ */
+export function parseBackupText(content: string): ShopTrackBackup {
+  if (typeof content !== 'string') throw new Error('Backup file is not text.');
+  const json = content.replace(/^\uFEFF/, '').trim();
+  if (!json) throw new Error('Backup file is empty.');
+  return normaliseBackup(JSON.parse(json));
+}
+
+/** Replace every data set and its staged media as one coordinated restore. */
+export async function restoreBackup(
+  db: SQLiteDatabase,
+  value: unknown,
+  mediaAdapter?: RestoreMediaAdapter
+): Promise<void> {
   const backup = normaliseBackup(value);
   const data = backup.data;
+  if (data.media.length > 0 && !mediaAdapter) {
+    throw new Error('This backup contains photos, so a staged media restore adapter is required.');
+  }
+  const stagedMedia = mediaAdapter
+    ? await mediaAdapter.stageRestore(data.media.map(asset => ({ ...asset })))
+    : null;
 
-  await db.withTransactionAsync(async () => {
+  try {
+    await db.withTransactionAsync(async () => {
     // Children before the tables they reference: count_sessions and cash_ups
     // point at staff_members, so staff go last.
     await db.execAsync(`
@@ -1308,11 +1718,12 @@ export async function restoreBackup(db: SQLiteDatabase, value: unknown): Promise
     for (const product of data.products) {
       await db.runAsync(
         `INSERT INTO products
-           (id, name, barcode, unit_label, buy_price, sell_price, current_qty,
-            low_stock_threshold, is_active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, name, barcode, photo_path, unit_label, buy_price, sell_price, current_qty,
+             low_stock_threshold, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          product.id, product.name, product.barcode ?? null, product.unit_label ?? 'units', product.buy_price ?? null,
+          product.id, product.name, product.barcode ?? null, product.photo_path ?? null,
+          product.unit_label ?? 'units', product.buy_price ?? null,
           product.sell_price ?? null, product.current_qty ?? 0, product.low_stock_threshold ?? 5,
           product.is_active ?? 1, product.created_at ?? 0, product.updated_at ?? 0,
         ]
@@ -1332,10 +1743,11 @@ export async function restoreBackup(db: SQLiteDatabase, value: unknown): Promise
     }
     for (const customer of data.customers) {
       await db.runAsync(
-        `INSERT INTO customers (id, name, phone, is_active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO customers (id, name, phone, photo_path, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
         [
-          customer.id, customer.name, customer.phone ?? null, customer.is_active ?? 1,
+          customer.id, customer.name, customer.phone ?? null, customer.photo_path ?? null,
+          customer.is_active ?? 1,
           customer.created_at ?? 0, customer.updated_at ?? 0,
         ]
       );
@@ -1367,9 +1779,12 @@ export async function restoreBackup(db: SQLiteDatabase, value: unknown): Promise
     }
     for (const expense of data.expenses) {
       await db.runAsync(
-        `INSERT INTO expenses (id, category, amount, notes, recorded_at)
-         VALUES (?, ?, ?, ?, ?)`,
-        [expense.id, expense.category, expense.amount, expense.notes ?? null, expense.recorded_at]
+        `INSERT INTO expenses (id, category, amount, notes, receipt_photo_path, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          expense.id, expense.category, expense.amount, expense.notes ?? null,
+          expense.receipt_photo_path ?? null, expense.recorded_at,
+        ]
       );
     }
     for (const entry of data.sales_entries) {
@@ -1402,5 +1817,32 @@ export async function restoreBackup(db: SQLiteDatabase, value: unknown): Promise
         [setting.key, setting.value, setting.updated_at ?? 0]
       );
     }
-  });
+      if (stagedMedia?.recoveryToken) {
+        await db.runAsync(
+          `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+          [MEDIA_RESTORE_TOKEN_SETTING, stagedMedia.recoveryToken, Date.now()]
+        );
+      }
+      // Commit the staged files before the SQL callback returns. If this throws,
+      // SQLite rolls back; if SQLite itself later fails to commit, the catch
+      // below asks the media adapter to undo the committed file swap too.
+      await stagedMedia?.commit();
+    });
+  } catch (error) {
+    await stagedMedia?.rollback();
+    throw error;
+  }
+  // At this point both SQLite and the replacement media root are durable, so
+  // the adapter no longer needs to retain its rollback snapshot.
+  await stagedMedia?.finalize();
+  if (stagedMedia?.recoveryToken) {
+    // The journal is already gone. If this housekeeping write fails, startup
+    // safely clears the marker; the restored shop must not look failed now.
+    try {
+      await db.runAsync('DELETE FROM settings WHERE key = ?', [MEDIA_RESTORE_TOKEN_SETTING]);
+    } catch {
+      // Best-effort marker cleanup; createBackup also excludes this key.
+    }
+  }
 }

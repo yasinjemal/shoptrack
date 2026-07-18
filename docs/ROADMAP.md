@@ -12,36 +12,54 @@ features; never cap, paywall, or endanger anything an owner already has.
 
 ## Status — July 2026 build-out
 
-Everything below that is achievable in code has been **built and is covered by
-the test suite** (`npm test`, `npm run typecheck`, web bundle export all
-green): i18n across en/zu/xh/st/af/sw/am with compile-time completeness,
-settings-backed currency (ZAR/KES/NGN/ETB) and country packs, schema v9
-(settings, mobile-money recording, staff attribution) with additive tested
-migrations, backup format v2 covering every table, daily auto-backup with
-7-file rotation, local crash log that travels inside backups, WhatsApp message
-builders (credit reminders, receipts, reorder sheets), read-aloud statements,
-voice number entry, barcode product finder, business-health report, activation
-metric, encrypted cloud-backup client (recovery phrase, client-side
-encryption), partner attribution, entitlement policy (nothing free ever
-becomes paid), Ethiopian calendar support, and Sentry telemetry behind a
-privacy scrubber.
+The current verified baseline includes settings-backed currency
+(ZAR/KES/NGN/ETB), country packs, schema v11 with additive migrations, backup
+format v7 covering all ten database collections plus embedded managed media,
+daily seven-file local rotation, local crash evidence, WhatsApp message
+builders, read-aloud and voice
+number entry, local barcode finding, business-health reporting, activation and
+partner attribution, a permanent-free entitlement policy, Ethiopian calendar
+support, an encrypted cloud-backup client, and privacy-scrubbed Sentry wiring.
 
-**What remains needs the owner, not code:**
+That is **not** the end of the code roadmap. [PHASE-TRACKER.md](PHASE-TRACKER.md)
+is the authoritative dependency-ordered implementation list. Phase A's
+explicit language drafts are now built and protected by an anti-scaffold gate;
+native approval remains external. Phase B's product/customer/receipt photo
+flows and cache-first Open Food Facts editable prefill are code-complete and
+test-backed; their camera/gallery, file-provider, second-device restore, and
+live-network acceptance remains a real-Android gate. The code-achievable C
+foundations are also built: tested HTTP object-store contract, device-local
+opt-in encrypted outbox/retry, Plus-gated read-only viewer, optional identity
+and blob-locator contracts, and a pinned permanent-free entitlement policy.
+D1 restore preview/safety/Undo and D2 sales statistics are built. Their real
+backend, account, billing and physical-device acceptance gates remain open.
+
+Photo privacy is deliberate: private daily snapshots and encrypted envelopes
+can contain all photos, but a plaintext backup shared through another app omits
+customer/ID photos. Android OS app-data backup is disabled, so uninstalling
+also removes ShopTrack's private snapshots unless an explicit backup was copied
+outside the app first.
+
+**What remains genuinely external or decision-gated:**
 
 1. **Run the pilot** (docs/PILOT-TRACKER.md): 3–5 shops, 14 days — nothing
    else on this page matters until 2+ shops keep counting.
 2. **Real-Android rehearsal** (BEFORE-PILOT Tripwire 3): migration + backup +
-   restore on a physical phone, then tag and cut `pilot-1.0`.
+   photo capture/gallery + Open Food Facts online/offline + second-install
+   restore on physical phones, then tag and cut `pilot-1.0`.
 3. **Tap-through on a phone**: engines are tested, screens are not rendered in
    CI; "done = tapped through" still stands for every new screen.
 4. **Sentry account**: set `EXPO_PUBLIC_SENTRY_DSN` (and org/project in
    app config) to activate remote crash reporting.
-5. **Cloud-backup bucket**: stand up dumb object storage and pass its URL to
-   `HttpCloudBackupStore` — the client, encryption, and recovery phrase are
-   done.
-6. **Native-speaker review** of the xh / st / af / sw / am string files —
-   they compile (full key coverage) but are machine-drafted.
-7. **EAS builds + release train** (docs/RELEASE-TRAIN.md) and, post-pilot,
+5. **Cloud-backup bucket**: stand up authenticated object storage and pass its
+   URL to `HttpCloudBackupStore`; the manual client, opt-in retry outbox and
+   read-only viewer exist, but the live service and credentials do not.
+6. **Backend/revenue decisions**: choose Supabase/Firebase, recovery-key escrow,
+   Plus price/billing, Google OAuth client and authenticated account-to-blob
+   mapping. Provider-neutral code fails closed until these are real.
+7. **Native-speaker review** of the xh / st / af / sw / am / om string files.
+   Drafting is code work; approval is not.
+8. **EAS builds + release train** (docs/RELEASE-TRAIN.md) and, post-pilot,
    distribution-partner conversations (Flash, Kazang, telco agent networks).
 
 ---
@@ -122,8 +140,10 @@ counts: *do they keep using it after 14 days?* The bar is already set in
 [PILOT-TRACKER.md](PILOT-TRACKER.md): at least 2 shops still counting.
 
 1. ~~**Fix the backup gap.**~~ **Done, July 2026** — the sales book was missing
-   from backups (see the fired tripwire in [BEFORE-PILOT.md](BEFORE-PILOT.md)).
-   Backup format is now v2 and covers all eight tables.
+   from the original backup (see the fired tripwire in
+   [BEFORE-PILOT.md](BEFORE-PILOT.md)). The format has since advanced to v7 and
+   covers all ten database collections, including settings and staff, plus the
+   exact managed-media set referenced by the shop.
 2. **Commit the sales-calendar work in progress** so the pilot build comes from
    a tagged, clean commit.
 3. **Minimal crash visibility, zero network:** a global error handler that

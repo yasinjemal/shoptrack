@@ -8,11 +8,10 @@
  * what they paid for fish oil.
  */
 
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   SafeAreaView,
-  ScrollView,
   Text,
   TextInput,
   TouchableOpacity,
@@ -21,11 +20,26 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { getCurrentCurrency } from '../../core/currency';
+import { parseNonNegativeDecimal, parseNonNegativeWhole } from '../../core/userNumber';
 
 import { addProduct } from '../../core/db';
 import { styles } from '../styles';
 import type { Strings } from '../../i18n';
+import { lookupOpenFoodFactsProduct } from '../../net/openFoodFacts';
+import { deletePhoto } from '../../media/photoStore';
 import { BarcodeFinderButton } from '../components/BarcodeFinderButton';
+import { KeyboardForm } from '../components/KeyboardForm';
+import { PhotoField } from '../components/PhotoField';
+import { ScreenHeader } from '../components/ScreenHeader';
+import { color } from '../theme';
+
+function discardDraftPhoto(path: string): void {
+  try {
+    deletePhoto(path);
+  } catch (error) {
+    console.warn('Draft product photo cleanup failed:', error);
+  }
+}
 
 export function AddProductScreen({
   db,
@@ -44,26 +58,140 @@ export function AddProductScreen({
   const [buyPrice, setBuyPrice] = useState('');
   const [quantity, setQuantity] = useState('');
   const [saving, setSaving] = useState(false);
+  const [lookingUpBarcode, setLookingUpBarcode] = useState(false);
+  const [photoPath, setPhotoPath] = useState<string | null>(null);
+  const nameRef = useRef(name);
+  const barcodeRef = useRef(barcode);
+  const nameTouchedRef = useRef(false);
+  const lookupTokenRef = useRef(0);
+  const mountedRef = useRef(true);
+  const draftPhotoRef = useRef<string | null>(null);
+  const committingRef = useRef(false);
+  const committedRef = useRef(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => () => {
+    // A committed path belongs to the product. A write in flight may still
+    // commit it, so its completion path owns cleanup instead of this unmount.
+    if (!committedRef.current && !committingRef.current && draftPhotoRef.current) {
+      discardDraftPhoto(draftPhotoRef.current);
+      draftPhotoRef.current = null;
+    }
+  }, []);
+
+  const sellPriceBlank = sellPrice.trim() === '';
+  const buyPriceBlank = buyPrice.trim() === '';
+  const quantityBlank = quantity.trim() === '';
+  const parsedSellPrice = sellPriceBlank ? null : parseNonNegativeDecimal(sellPrice);
+  const parsedBuyPrice = buyPriceBlank ? null : parseNonNegativeDecimal(buyPrice);
+  const parsedQuantity = quantityBlank ? 0 : parseNonNegativeWhole(quantity);
+  const numbersValid = (sellPriceBlank || parsedSellPrice !== null)
+    && (buyPriceBlank || parsedBuyPrice !== null)
+    && parsedQuantity !== null;
+  const canSave = name.trim().length > 0 && numbersValid && !saving;
+
+  const handleNameChange = (value: string) => {
+    nameTouchedRef.current = true;
+    nameRef.current = value;
+    setName(value);
+  };
+
+  const handleBarcodeScanned = (scannedBarcode: string) => {
+    // Keep scanning useful even when the catalogue service is offline: the
+    // code belongs to the form immediately and lookup continues in parallel.
+    barcodeRef.current = scannedBarcode;
+    setBarcode(scannedBarcode);
+
+    const lookupToken = ++lookupTokenRef.current;
+    const nameWasUntouchedAndBlank =
+      !nameTouchedRef.current && nameRef.current.trim() === '';
+    setLookingUpBarcode(true);
+
+    void lookupOpenFoodFactsProduct(scannedBarcode)
+      .then(product => {
+        if (
+          !mountedRef.current
+          || lookupToken !== lookupTokenRef.current
+          || barcodeRef.current !== scannedBarcode
+          || !product
+          || !nameWasUntouchedAndBlank
+          || nameTouchedRef.current
+          || nameRef.current.trim() !== ''
+        ) {
+          return;
+        }
+
+        nameRef.current = product.name;
+        setName(product.name);
+      })
+      .catch(() => {
+        // A miss or network problem is deliberately silent; manual entry stays available.
+      })
+      .finally(() => {
+        if (mountedRef.current && lookupToken === lookupTokenRef.current) {
+          setLookingUpBarcode(false);
+        }
+      });
+  };
+
+  const handleBarcodeChange = (value: string) => {
+    barcodeRef.current = value;
+    // A manual edit supersedes any catalogue response for the scanned code.
+    lookupTokenRef.current += 1;
+    setLookingUpBarcode(false);
+    setBarcode(value);
+  };
+
+  const handlePhotoChange = (nextPath: string | null) => {
+    const previousDraft = draftPhotoRef.current;
+    if (previousDraft && previousDraft !== nextPath) discardDraftPhoto(previousDraft);
+    draftPhotoRef.current = nextPath;
+    setPhotoPath(nextPath);
+  };
+
+  const handleCancel = () => {
+    if (committingRef.current) return;
+    const draft = draftPhotoRef.current;
+    draftPhotoRef.current = null;
+    if (draft) discardDraftPhoto(draft);
+    onCancel();
+  };
 
   const handleSave = async () => {
-    if (!name.trim()) return;
+    if (!canSave || parsedQuantity == null) return;
 
     setSaving(true);
+    committingRef.current = true;
     try {
-      const qty = quantity ? parseInt(quantity, 10) : 0;
       await addProduct(db, {
         name,
         barcode,
-        sellPrice: sellPrice ? parseFloat(sellPrice) : null,
-        buyPrice: buyPrice ? parseFloat(buyPrice) : null,
-        quantity: qty,
+        photoPath,
+        sellPrice: parsedSellPrice,
+        buyPrice: parsedBuyPrice,
+        quantity: parsedQuantity,
       });
 
-      onSave();
+      committedRef.current = true;
+      draftPhotoRef.current = null;
+      if (mountedRef.current) onSave();
     } catch (error) {
       console.error('Save error:', error);
-      Alert.alert(strings.ERROR_TITLE, strings.ERROR_SAVE_PRODUCT);
-      setSaving(false);
+      if (mountedRef.current) {
+        Alert.alert(strings.ERROR_TITLE, strings.ERROR_SAVE_PRODUCT);
+        setSaving(false);
+      } else if (draftPhotoRef.current) {
+        discardDraftPhoto(draftPhotoRef.current);
+        draftPhotoRef.current = null;
+      }
+    } finally {
+      committingRef.current = false;
     }
   };
 
@@ -71,23 +199,18 @@ export function AddProductScreen({
     <SafeAreaView style={styles.container}>
       <StatusBar style="dark" />
 
-      <View style={styles.screenHeader}>
-        <TouchableOpacity onPress={onCancel}>
-          <Text style={styles.backButton}>{strings.CANCEL}</Text>
-        </TouchableOpacity>
-        <Text style={styles.screenTitle}>{strings.ADD_PRODUCT}</Text>
-        <View style={{ width: 50 }} />
-      </View>
+      <ScreenHeader title={strings.ADD_PRODUCT} leftLabel={strings.CANCEL} onLeft={handleCancel} />
 
-      <ScrollView style={styles.formContainer}>
+      <KeyboardForm style={styles.formContainer}>
         <Text style={styles.inputLabel}>{strings.WHAT_DO_YOU_SELL}</Text>
         <TextInput
           testID="add-product-name"
           style={styles.textInput}
           placeholder={strings.PRODUCT_EXAMPLE}
-          placeholderTextColor="#999"
+          placeholderTextColor={color.inkMuted}
+          accessibilityLabel={strings.WHAT_DO_YOU_SELL}
           value={name}
-          onChangeText={setName}
+          onChangeText={handleNameChange}
           autoFocus
         />
 
@@ -95,13 +218,35 @@ export function AddProductScreen({
         <TextInput
           style={styles.textInput}
           placeholder="600..."
-          placeholderTextColor="#999"
+          placeholderTextColor={color.inkMuted}
+          accessibilityLabel={strings.BARCODE_OPTIONAL}
           keyboardType="number-pad"
           value={barcode}
-          onChangeText={setBarcode}
+          onChangeText={handleBarcodeChange}
         />
-        <BarcodeFinderButton strings={strings} onScanned={setBarcode} />
+        <BarcodeFinderButton strings={strings} onScanned={handleBarcodeScanned} />
+        {lookingUpBarcode && (
+          <View
+            testID="add-product-barcode-lookup"
+            accessible
+            accessibilityRole="progressbar"
+            accessibilityLabel={strings.BARCODE_LOOKING_UP}
+            accessibilityLiveRegion="polite"
+            accessibilityState={{ busy: true }}
+          >
+            <Text style={styles.inputHint}>{strings.BARCODE_LOOKING_UP}</Text>
+          </View>
+        )}
         <Text style={styles.inputHint}>{strings.BARCODE_HINT}</Text>
+
+        <PhotoField
+          strings={strings}
+          purpose="product"
+          label={strings.PHOTO_LABEL}
+          photoPath={photoPath}
+          onChange={handlePhotoChange}
+          disabled={saving}
+        />
 
         <Text style={styles.inputLabel}>{strings.SELL_PRICE_OPTIONAL}</Text>
         <View style={styles.priceInputRow}>
@@ -110,7 +255,8 @@ export function AddProductScreen({
             testID="add-product-sell-price"
             style={styles.priceInput}
             placeholder="0.00"
-            placeholderTextColor="#999"
+            placeholderTextColor={color.inkMuted}
+            accessibilityLabel={strings.SELL_PRICE_OPTIONAL}
             keyboardType="decimal-pad"
             value={sellPrice}
             onChangeText={setSellPrice}
@@ -125,7 +271,8 @@ export function AddProductScreen({
             testID="add-product-buy-price"
             style={styles.priceInput}
             placeholder="0.00"
-            placeholderTextColor="#999"
+            placeholderTextColor={color.inkMuted}
+            accessibilityLabel={strings.BUY_PRICE_OPTIONAL}
             keyboardType="decimal-pad"
             value={buyPrice}
             onChangeText={setBuyPrice}
@@ -138,7 +285,8 @@ export function AddProductScreen({
           testID="add-product-quantity"
           style={styles.textInput}
           placeholder="0"
-          placeholderTextColor="#999"
+          placeholderTextColor={color.inkMuted}
+          accessibilityLabel={strings.CURRENT_STOCK_OPTIONAL}
           keyboardType="number-pad"
           value={quantity}
           onChangeText={setQuantity}
@@ -149,16 +297,19 @@ export function AddProductScreen({
           testID="add-product-save"
           style={[
             styles.saveButton,
-            (!name.trim() || saving) && styles.saveButtonDisabled,
+            !canSave && styles.saveButtonDisabled,
           ]}
           onPress={handleSave}
-          disabled={!name.trim() || saving}
+          disabled={!canSave}
+          accessibilityRole="button"
+          accessibilityLabel={strings.ADD_PRODUCT}
+          accessibilityState={{ disabled: !canSave, busy: saving }}
         >
           <Text style={styles.saveButtonText}>
             {saving ? strings.SAVING : strings.ADD_PRODUCT}
           </Text>
         </TouchableOpacity>
-      </ScrollView>
+      </KeyboardForm>
     </SafeAreaView>
   );
 }

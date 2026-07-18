@@ -4,6 +4,7 @@ import {
   dailyBackupFilename,
   isSharedBackupDue,
   parseCrashRecord,
+  preRestoreBackupFilename,
 } from './safety';
 
 let failures = 0;
@@ -27,6 +28,11 @@ const files = Array.from({ length: 9 }, (_, i) => `file:///shoptrack-auto-2026-0
 equal(backupFilesToDelete(files).length, 2, 'seven snapshots survive');
 equal(backupFilesToDelete(files)[0].endsWith('01.json'), true, 'oldest goes first');
 equal(backupFilesToDelete(files, 10).length, 0, 'nothing is deleted under the limit');
+equal(
+  preRestoreBackupFilename(Date.parse('2026-07-18T09:30:04.123Z')),
+  'shoptrack-before-restore-2026-07-18T09-30-04-123Z.json',
+  'pre-restore snapshot names are sortable and filesystem-safe'
+);
 
 console.log('TEST: shared-backup nudge');
 const NOW = Date.UTC(2026, 6, 16);
@@ -36,4 +42,3 @@ equal(isSharedBackupDue(NOW - 6 * 86400000, NOW), false, 'six days is still fres
 
 if (failures > 0) { console.error(`FAILED: ${failures} safety assertion(s)`); process.exit(1); }
 console.log('PASSED: all data-safety assertions held');
-

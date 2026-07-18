@@ -10,7 +10,6 @@
 
 import React, { useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
   SafeAreaView,
   ScrollView,
   Text,
@@ -25,6 +24,8 @@ import { formatMoney } from '../../core/currency';
 import { loadMovements, loadRecentProductCounts, toCoreProduct, type AppProduct } from '../../core/db';
 import { styles } from '../styles';
 import type { Strings } from '../../i18n';
+import { LoadingState } from '../components/LoadingState';
+import { ScreenHeader } from '../components/ScreenHeader';
 
 interface ActivityItem {
   product_id: number;
@@ -144,9 +145,7 @@ export function ActivityScreen({
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#4CAF50" />
-        </View>
+        <LoadingState label={strings.RECENT_ACTIVITY} />
       </SafeAreaView>
     );
   }
@@ -155,13 +154,7 @@ export function ActivityScreen({
     <SafeAreaView style={styles.container}>
       <StatusBar style="dark" />
 
-      <View style={styles.screenHeader}>
-        <TouchableOpacity onPress={onBack}>
-          <Text style={styles.backButton}>{strings.BACK}</Text>
-        </TouchableOpacity>
-        <Text style={styles.screenTitle}>{strings.RECENT_ACTIVITY}</Text>
-        <View style={{ width: 50 }} />
-      </View>
+      <ScreenHeader title={strings.RECENT_ACTIVITY} leftLabel={strings.BACK} onLeft={onBack} />
 
       <ScrollView style={styles.activityContent}>
         {/* Tier 4.3: Silent Loss Detector */}

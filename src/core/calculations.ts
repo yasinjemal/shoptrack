@@ -104,6 +104,16 @@ export interface PeriodSummary {
   overall_confidence: number;
 }
 
+/**
+ * Keep every currency result on the same two-decimal boundary used by the
+ * credit, expense, cash-up and sales engines. SQLite still stores REAL values;
+ * this prevents binary floating-point noise from escaping the calculation
+ * engine while the separately gated integer-cents migration remains deferred.
+ */
+function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 // ============================================
 // CORE CALCULATION: Single Product
 // ============================================
@@ -161,9 +171,9 @@ export function calculateProductMetrics(
   // real loss. Clamp before every money calculation so a first count cannot
   // surface as negative profit on Home.
   const sold_for_money = Math.max(0, estimated_sold);
-  const estimated_revenue = sold_for_money * sell_price_used;
-  const estimated_cost = sold_for_money * buy_price_used;
-  const estimated_profit = estimated_revenue - estimated_cost;
+  const estimated_revenue = roundMoney(sold_for_money * sell_price_used);
+  const estimated_cost = roundMoney(sold_for_money * buy_price_used);
+  const estimated_profit = roundMoney(estimated_revenue - estimated_cost);
   const profit_margin = estimated_revenue > 0 
     ? (estimated_profit / estimated_revenue) * 100 
     : 0;
@@ -454,7 +464,7 @@ export function calculatePeriodSummary(
     .map(p => calculateProductMetrics(p, movements, period_start, period_end));
   
   // Aggregate totals
-  const total_stock_in_cost = movements
+  const total_stock_in_cost = roundMoney(movements
     .filter(m => 
       m.type === 'STOCK_IN' &&
       m.recorded_at >= period_start &&
@@ -464,13 +474,13 @@ export function calculatePeriodSummary(
       const product = products.find(p => p.id === m.product_id);
       const unit_cost = m.buy_price_at_time ?? product?.buy_price ?? 0;
       return sum + (m.quantity * unit_cost);
-    }, 0);
+    }, 0));
   
-  const total_estimated_revenue = productMetrics
-    .reduce((sum, m) => sum + m.estimated_revenue, 0);
+  const total_estimated_revenue = roundMoney(productMetrics
+    .reduce((sum, m) => sum + m.estimated_revenue, 0));
   
-  const total_estimated_profit = productMetrics
-    .reduce((sum, m) => sum + m.estimated_profit, 0);
+  const total_estimated_profit = roundMoney(productMetrics
+    .reduce((sum, m) => sum + m.estimated_profit, 0));
   
   const total_units_sold = productMetrics
     .reduce((sum, m) => sum + m.estimated_sold, 0);

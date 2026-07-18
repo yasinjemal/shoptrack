@@ -26,7 +26,7 @@ export function StaffAttribution({
       setMembers(active);
       onRequirementChange(active.length > 0);
     });
-  }, [db]);
+  }, [db, onRequirementChange]);
 
   if (members.length === 0) return null;
 

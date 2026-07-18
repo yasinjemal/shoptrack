@@ -67,6 +67,8 @@ export const color = {
   inkMuted: '#667085',
   /** Text on a solid coloured button. */
   onAction: '#FFFFFF',
+  /** Secondary copy on the primary green surface. 4.52:1 on `green`. */
+  onActionMuted: '#E7F4E9',
 
   // Money in / positive / primary action
   green: '#2E7D32',
@@ -168,6 +170,11 @@ export const type = {
   caption: { fontSize: 13, lineHeight: 18, fontWeight: '400' },
 } as const satisfies Record<string, TextStyle>;
 
+/** Money and ledger columns must not jump as digits change. */
+export const numeric = {
+  fontVariant: ['tabular-nums'],
+} as const satisfies TextStyle;
+
 // ============================================
 // ELEVATION
 // ============================================
@@ -228,4 +235,38 @@ export const touch = {
   minTarget: 44,
   /** Grows the touch area of small controls without growing the visual. */
   hitSlop: { top: 8, bottom: 8, left: 8, right: 8 },
+} as const;
+
+// ============================================
+// COMPONENT GEOMETRY AND INTERACTION STATES
+// ============================================
+//
+// These values used to be re-invented in feature styles. Keeping them beside
+// colour, type and spacing means a control remains the same control everywhere.
+
+export const border = {
+  hairline: 1,
+  selected: 2,
+  focus: 2,
+} as const;
+
+export const control = {
+  compact: touch.minTarget,
+  input: 56,
+  button: 52,
+  heroButton: 64,
+} as const;
+
+export const icon = {
+  sm: 16,
+  md: 20,
+  lg: 28,
+  xl: 40,
+  empty: 48,
+} as const;
+
+export const state = {
+  disabledOpacity: 0.45,
+  pressedOpacity: 0.86,
+  focusColor: color.amber,
 } as const;

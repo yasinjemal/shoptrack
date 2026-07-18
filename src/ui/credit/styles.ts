@@ -13,14 +13,14 @@
 
 import { StyleSheet } from 'react-native';
 
-import { color } from '../theme';
+import { border, color, control, icon, numeric, radius, space, type } from '../theme';
 
 export const creditStyles = StyleSheet.create({
   list: {
     flex: 1,
   },
   form: {
-    padding: 20,
+    padding: space.lg,
   },
 
   // Outstanding total
@@ -38,8 +38,8 @@ export const creditStyles = StyleSheet.create({
     marginBottom: 4,
   },
   totalAmount: {
-    fontSize: 32,
-    fontWeight: '700',
+    ...type.display,
+    ...numeric,
     color: color.amberInk,
   },
   totalHint: {
@@ -80,8 +80,8 @@ export const creditStyles = StyleSheet.create({
   dueGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 4,
+    gap: space.sm,
+    marginTop: space.xs,
   },
   dueChip: {
     paddingVertical: 10,
@@ -144,20 +144,38 @@ export const creditStyles = StyleSheet.create({
     borderColor: color.border,
     padding: 16,
   },
+  customerSummaryRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  customerSummaryBody: {
+    flex: 1,
+    minWidth: 0,
+  },
+  customerPhoto: {
+    width: 56,
+    height: 56,
+    marginRight: space.md,
+    borderRadius: radius.sm,
+    backgroundColor: color.surfaceSunken,
+  },
   customerHeader: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
+    gap: space.xs,
   },
   customerName: {
     fontSize: 17,
     fontWeight: '600',
     color: color.ink,
     flex: 1,
+    minWidth: 96,
   },
   customerBalance: {
-    fontSize: 20,
-    fontWeight: '700',
+    ...type.h2,
+    ...numeric,
     color: color.amberInk,
   },
   customerBalanceCredit: {
@@ -182,14 +200,35 @@ export const creditStyles = StyleSheet.create({
   },
   customerActions: {
     flexDirection: 'row',
-    marginTop: 12,
-    gap: 8,
+    flexWrap: 'wrap',
+    marginTop: space.md,
+    gap: space.sm,
+  },
+  manageButton: {
+    flex: 1,
+    minWidth: 92,
+    minHeight: control.compact,
+    justifyContent: 'center',
+    paddingVertical: space.sm,
+    borderRadius: radius.sm,
+    borderWidth: border.hairline,
+    borderColor: color.greenBorder,
+    backgroundColor: color.greenSoft,
+    alignItems: 'center',
+  },
+  manageButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: color.greenInk,
   },
   giveButton: {
     flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    borderWidth: 1,
+    minWidth: 92,
+    minHeight: control.compact,
+    justifyContent: 'center',
+    paddingVertical: space.sm,
+    borderRadius: radius.sm,
+    borderWidth: border.hairline,
     borderColor: color.border,
     alignItems: 'center',
   },
@@ -200,8 +239,11 @@ export const creditStyles = StyleSheet.create({
   },
   receiveButton: {
     flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
+    minWidth: 92,
+    minHeight: control.compact,
+    justifyContent: 'center',
+    paddingVertical: space.sm,
+    borderRadius: radius.sm,
     backgroundColor: color.green,
     alignItems: 'center',
   },
@@ -213,8 +255,7 @@ export const creditStyles = StyleSheet.create({
 
   // Recording an entry
   entryCustomer: {
-    fontSize: 24,
-    fontWeight: '700',
+    ...type.h1,
     color: color.ink,
   },
   entryCurrent: {
@@ -222,11 +263,14 @@ export const creditStyles = StyleSheet.create({
     color: color.inkMuted,
     marginTop: 4,
   },
+  manageCustomerIntro: {
+    marginBottom: space.md,
+  },
 
   // Empty state
   emptyIcon: {
-    fontSize: 48,
-    marginBottom: 12,
+    fontSize: icon.empty,
+    marginBottom: space.md,
   },
   emptyTitle: {
     fontSize: 20,

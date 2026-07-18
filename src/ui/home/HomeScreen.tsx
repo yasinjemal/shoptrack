@@ -9,8 +9,9 @@
  * the profit figure arrives rather than just being there.
  */
 
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
+  AccessibilityInfo,
   Animated,
   Pressable,
   SafeAreaView,
@@ -85,9 +86,21 @@ export function HomeScreen({
   // so it stays smooth even while the database is still being read.
   const profitFade = useRef(new Animated.Value(0)).current;
   const profitRise = useRef(new Animated.Value(8)).current;
+  const [reduceMotion, setReduceMotion] = useState(false);
+
+  useEffect(() => {
+    void AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion);
+    const subscription = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion);
+    return () => subscription.remove();
+  }, []);
 
   useEffect(() => {
     if (lastProfit === null) return;
+    if (reduceMotion) {
+      profitFade.setValue(1);
+      profitRise.setValue(0);
+      return;
+    }
     Animated.parallel([
       Animated.timing(profitFade, {
         toValue: 1,
@@ -100,7 +113,7 @@ export function HomeScreen({
         useNativeDriver: true,
       }),
     ]).start();
-  }, [lastProfit, profitFade, profitRise]);
+  }, [lastProfit, profitFade, profitRise, reduceMotion]);
 
   return (
     <SafeAreaView style={styles.container}>
@@ -150,6 +163,9 @@ export function HomeScreen({
           <Pressable
             style={({ pressed }) => [styles.salesCard, pressed && styles.salesCardPressed]}
             android_ripple={{ color: color.ripple }}
+            accessibilityRole="button"
+            accessibilityLabel={strings.OWNER_LOCKED_CARD}
+            accessibilityHint={strings.OWNER_LOCKED_CARD_HINT}
             onPress={() => setScreen('owner_unlock')}
           >
             <Text style={styles.salesCardLabel}>{strings.OWNER_LOCKED_CARD}</Text>
@@ -219,6 +235,9 @@ export function HomeScreen({
         {lastCashUp && !lastCashUp.is_opening && lastCashUp.difference < -CASH_TOLERANCE && (
           <TouchableOpacity
             style={styles.shortfallCard}
+            accessibilityRole="button"
+            accessibilityLabel={`${strings.CASHUP_SHORT}. ${formatMoney(Math.abs(lastCashUp.difference))}`}
+            accessibilityHint={strings.CASHUP_HOME_SHORTFALL}
             onPress={() => setScreen('cashup')}
           >
             <Text style={styles.shortfallLabel}>{strings.CASHUP_SHORT}</Text>
@@ -236,6 +255,8 @@ export function HomeScreen({
           <Pressable
             style={({ pressed }) => [styles.salesCard, pressed && styles.salesCardPressed]}
             android_ripple={{ color: color.ripple }}
+            accessibilityRole="button"
+            accessibilityLabel={`${strings.SALES_TOTAL_LABEL}. ${formatMoney(sales.total_profit)}`}
             onPress={() => setScreen('sales')}
           >
             <Text style={styles.salesCardLabel}>{strings.SALES_TOTAL_LABEL}</Text>
@@ -253,6 +274,8 @@ export function HomeScreen({
         {!ownerLocked && credit && summariseOutstanding(credit) && (
           <TouchableOpacity
             style={styles.creditCard}
+            accessibilityRole="button"
+            accessibilityLabel={`${strings.CREDIT_OUTSTANDING_LABEL}. ${formatMoney(credit.total_outstanding)}`}
             onPress={() => setScreen('credit')}
           >
             <Text style={styles.creditCardLabel}>{strings.CREDIT_OUTSTANDING_LABEL}</Text>
@@ -309,8 +332,14 @@ export function HomeScreen({
           </TouchableOpacity>
         )}
 
-        {sharedBackupDue && (
-          <TouchableOpacity style={styles.countReminderCard} onPress={onBackup}>
+        {sharedBackupDue && !ownerLocked && (
+          <TouchableOpacity
+            style={styles.countReminderCard}
+            accessibilityRole="button"
+            accessibilityLabel={strings.BACKUP_NUDGE_TITLE}
+            accessibilityHint={strings.BACKUP_NUDGE_HINT}
+            onPress={onBackup}
+          >
             <Text style={styles.countReminderTitle}>{strings.BACKUP_NUDGE_TITLE}</Text>
             <Text style={styles.countReminderHint}>{strings.BACKUP_NUDGE_HINT}</Text>
           </TouchableOpacity>
@@ -328,6 +357,11 @@ export function HomeScreen({
               pressed && styles.primaryActionPressed,
             ]}
             android_ripple={{ color: color.ripple }}
+            accessibilityRole="button"
+            accessibilityLabel={strings.COUNT_STOCK}
+            accessibilityHint={products.some(p => p.current_qty > 0)
+              ? strings.COUNT_TO_PROFIT
+              : strings.COUNT_BASELINE}
             onPress={() => setScreen('count')}
           >
             <Text style={styles.primaryActionIcon}>📦</Text>
@@ -345,6 +379,9 @@ export function HomeScreen({
               testID="home-add-stock"
               style={({ pressed }) => [styles.secondaryAction, pressed && styles.secondaryActionPressed]}
               android_ripple={{ color: color.ripple, borderless: false }}
+              accessibilityRole="button"
+              accessibilityLabel={strings.ADD_STOCK}
+              accessibilityHint={strings.WHEN_YOU_BUY}
               onPress={() => setScreen('stock_in')}
             >
               <Text style={styles.secondaryActionIcon}>➕</Text>
@@ -355,6 +392,9 @@ export function HomeScreen({
             <Pressable
               style={({ pressed }) => [styles.secondaryAction, pressed && styles.secondaryActionPressed]}
               android_ripple={{ color: color.ripple, borderless: false }}
+              accessibilityRole="button"
+              accessibilityLabel={strings.PRODUCTS_LABEL}
+              accessibilityHint={strings.ADD_OR_EDIT}
               onPress={() => setScreen('products')}
             >
               <Text style={styles.secondaryActionIcon}>📋</Text>
@@ -365,6 +405,9 @@ export function HomeScreen({
             <Pressable
               style={({ pressed }) => [styles.secondaryAction, pressed && styles.secondaryActionPressed]}
               android_ripple={{ color: color.ripple, borderless: false }}
+              accessibilityRole="button"
+              accessibilityLabel={strings.CREDIT_HOME_BUTTON}
+              accessibilityHint={strings.CREDIT_HOME_HINT}
               onPress={() => setScreen('credit')}
             >
               <Text style={styles.secondaryActionIcon}>📖</Text>
@@ -375,6 +418,9 @@ export function HomeScreen({
             <Pressable
               style={({ pressed }) => [styles.secondaryAction, pressed && styles.secondaryActionPressed]}
               android_ripple={{ color: color.ripple, borderless: false }}
+              accessibilityRole="button"
+              accessibilityLabel={strings.EXPENSES_HOME_BUTTON}
+              accessibilityHint={strings.EXPENSES_HOME_HINT}
               onPress={() => setScreen('expenses')}
             >
               <Text style={styles.secondaryActionIcon}>🧾</Text>
@@ -385,6 +431,9 @@ export function HomeScreen({
             <Pressable
               style={({ pressed }) => [styles.secondaryAction, pressed && styles.secondaryActionPressed]}
               android_ripple={{ color: color.ripple, borderless: false }}
+              accessibilityRole="button"
+              accessibilityLabel={strings.CASHUP_HOME_BUTTON}
+              accessibilityHint={strings.CASHUP_HOME_HINT}
               onPress={() => setScreen('cashup')}
             >
               <Text style={styles.secondaryActionIcon}>💰</Text>
@@ -397,6 +446,9 @@ export function HomeScreen({
             <Pressable
               style={({ pressed }) => [styles.secondaryAction, pressed && styles.secondaryActionPressed]}
               android_ripple={{ color: color.ripple, borderless: false }}
+              accessibilityRole="button"
+              accessibilityLabel={ownerLocked ? strings.SALES_TODAY : strings.SALES_HOME_BUTTON}
+              accessibilityHint={strings.SALES_HOME_HINT}
               onPress={() => setScreen(ownerLocked ? 'sales_today' : 'sales')}
             >
               <Text style={styles.secondaryActionIcon}>📗</Text>
@@ -409,6 +461,9 @@ export function HomeScreen({
             <Pressable
               style={({ pressed }) => [styles.secondaryAction, pressed && styles.secondaryActionPressed]}
               android_ripple={{ color: color.ripple, borderless: false }}
+              accessibilityRole="button"
+              accessibilityLabel={strings.HEALTH_TITLE}
+              accessibilityHint={strings.HEALTH_HINT}
               onPress={() => setScreen('health')}
             >
               <Text style={styles.secondaryActionIcon}>✓</Text>
@@ -422,6 +477,8 @@ export function HomeScreen({
             <View style={styles.insightButtons}>
               <TouchableOpacity
                 style={styles.insightButton}
+                accessibilityRole="button"
+                accessibilityLabel={strings.RECENT_ACTIVITY}
                 onPress={() => setScreen('activity')}
               >
                 <Text style={styles.insightButtonIcon}>📊</Text>
@@ -430,6 +487,8 @@ export function HomeScreen({
 
               <TouchableOpacity
                 style={styles.insightButton}
+                accessibilityRole="button"
+                accessibilityLabel={strings.THIS_WEEK}
                 onPress={() => setScreen('weekly')}
               >
                 <Text style={styles.insightButtonIcon}>📅</Text>
@@ -464,6 +523,8 @@ export function HomeScreen({
             <TouchableOpacity
               testID="home-add-first-product"
               style={styles.emptyPromptButton}
+              accessibilityRole="button"
+              accessibilityLabel={strings.ADD_FIRST_PRODUCT}
               onPress={() => setScreen('add_product')}
             >
               <Text style={styles.emptyPromptButtonText}>
@@ -475,7 +536,12 @@ export function HomeScreen({
 
         {latestCountSessionId != null && latestCountAt != null &&
           Date.now() - latestCountAt <= 60 * 60 * 1000 && (
-          <TouchableOpacity style={styles.homeUndoButton} onPress={onUndoLatestCount}>
+          <TouchableOpacity
+            style={styles.homeUndoButton}
+            accessibilityRole="button"
+            accessibilityLabel={strings.COUNT_UNDO}
+            onPress={onUndoLatestCount}
+          >
             <Text style={styles.homeUndoText}>{strings.COUNT_UNDO}</Text>
           </TouchableOpacity>
         )}
@@ -484,32 +550,44 @@ export function HomeScreen({
         <View style={styles.dataSection}>
           <Text style={styles.dataSectionTitle}>{strings.YOUR_DATA}</Text>
 
-          <TouchableOpacity
-            style={styles.dataButton}
-            onPress={onBackup}
-          >
-            <Text style={styles.dataButtonIcon}>💾</Text>
-            <View style={styles.dataButtonContent}>
-              <Text style={styles.dataButtonText}>{strings.SAVE_DATA}</Text>
-              <Text style={styles.dataButtonHint}>{strings.SAVE_DATA_HINT}</Text>
-            </View>
-          </TouchableOpacity>
+          {!ownerLocked && (
+            <>
+              <TouchableOpacity
+                style={styles.dataButton}
+                accessibilityRole="button"
+                accessibilityLabel={strings.SAVE_DATA}
+                accessibilityHint={strings.SAVE_DATA_HINT}
+                onPress={onBackup}
+              >
+                <Text style={styles.dataButtonIcon}>💾</Text>
+                <View style={styles.dataButtonContent}>
+                  <Text style={styles.dataButtonText}>{strings.SAVE_DATA}</Text>
+                  <Text style={styles.dataButtonHint}>{strings.SAVE_DATA_HINT}</Text>
+                </View>
+              </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.dataButton}
-            onPress={onRestore}
-          >
-            <Text style={styles.dataButtonIcon}>📂</Text>
-            <View style={styles.dataButtonContent}>
-              <Text style={styles.dataButtonText}>{strings.RESTORE_DATA}</Text>
-              <Text style={styles.dataButtonHint}>{strings.RESTORE_DATA_HINT}</Text>
-            </View>
-          </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.dataButton}
+                accessibilityRole="button"
+                accessibilityLabel={strings.RESTORE_DATA}
+                accessibilityHint={strings.RESTORE_DATA_HINT}
+                onPress={onRestore}
+              >
+                <Text style={styles.dataButtonIcon}>📂</Text>
+                <View style={styles.dataButtonContent}>
+                  <Text style={styles.dataButtonText}>{strings.RESTORE_DATA}</Text>
+                  <Text style={styles.dataButtonHint}>{strings.RESTORE_DATA_HINT}</Text>
+                </View>
+              </TouchableOpacity>
+            </>
+          )}
 
           {/* Language Toggle */}
           <TouchableOpacity
             testID="home-settings"
             style={styles.languageButton}
+            accessibilityRole="button"
+            accessibilityLabel={strings.SETTINGS}
             onPress={() => setScreen('settings')}
           >
             <Text style={styles.languageButtonIcon}>🌐</Text>

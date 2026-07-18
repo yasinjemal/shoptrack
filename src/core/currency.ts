@@ -70,6 +70,24 @@ export function getCurrentCurrency(): Currency {
 }
 
 /**
+ * Format money for a currency carried by some data other than the live shop.
+ *
+ * The remote backup viewer must render the backed-up shop's currency without
+ * changing the currency of the local phone. Keeping that distinction here
+ * prevents a read-only view from leaking into mutable app-wide state.
+ */
+export function formatMoneyInCurrency(
+  amount: number,
+  code: string | null | undefined,
+  decimals?: number
+): string {
+  const currency = code != null && code in CURRENCIES
+    ? CURRENCIES[code as CurrencyCode]
+    : DEFAULT_CURRENCY;
+  return `${currency.symbol}${amount.toFixed(decimals ?? currency.decimals)}`;
+}
+
+/**
  * Format an amount in the shop's currency: R240.00, KSh1,400 stays out of
  * scope -- no grouping, matching what every screen printed before.
  *
@@ -77,5 +95,5 @@ export function getCurrentCurrency(): Currency {
  * numbers ("R240 profit").
  */
 export function formatMoney(amount: number, decimals?: number): string {
-  return `${current.symbol}${amount.toFixed(decimals ?? current.decimals)}`;
+  return formatMoneyInCurrency(amount, current.code, decimals);
 }

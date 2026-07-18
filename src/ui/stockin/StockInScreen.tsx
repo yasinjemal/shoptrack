@@ -22,11 +22,16 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { formatMoney, getCurrentCurrency } from '../../core/currency';
+import { parseNonNegativeWhole, parsePositiveDecimal } from '../../core/userNumber';
 
 import { recordStockIn, undoStockIn, type AppProduct } from '../../core/db';
 import { styles } from '../styles';
+import { color } from '../theme';
 import type { Strings } from '../../i18n';
 import { BarcodeFinderButton } from '../components/BarcodeFinderButton';
+import { KeyboardForm } from '../components/KeyboardForm';
+import { ScreenHeader } from '../components/ScreenHeader';
+import { registerHardwareBackOverride } from '../navigation';
 
 export function StockInScreen({
   products,
@@ -47,11 +52,33 @@ export function StockInScreen({
   const [costMode, setCostMode] = useState<'total' | 'each'>('total');
   const [productSearch, setProductSearch] = useState('');
   const [saving, setSaving] = useState(false);
+  const [savedMovementId, setSavedMovementId] = useState<number | null>(null);
 
-  const qty = parseInt(quantity) || 0;
-  const enteredCost = parseFloat(cost) || 0;
+  const parsedQty = parseNonNegativeWhole(quantity);
+  const parsedCost = parsePositiveDecimal(cost);
+  const qty = parsedQty ?? 0;
+  const enteredCost = parsedCost ?? 0;
   const totalCost = costMode === 'each' ? enteredCost * qty : enteredCost;
-  const canSave = selectedProduct && qty > 0 && totalCost > 0;
+  const canSave = selectedProduct !== null
+    && parsedQty !== null
+    && qty > 0
+    && parsedCost !== null
+    && Number.isFinite(totalCost)
+    && totalCost > 0;
+
+  React.useEffect(() => registerHardwareBackOverride(() => {
+    if (savedMovementId != null) {
+      onComplete();
+      return true;
+    }
+    if (selectedProduct) {
+      setSelectedProduct(null);
+      setQuantity('');
+      setCost('');
+      return true;
+    }
+    return false;
+  }), [onComplete, savedMovementId, selectedProduct]);
 
   const chooseProduct = (product: AppProduct) => {
     setSelectedProduct(product);
@@ -70,28 +97,8 @@ export function StockInScreen({
     setSaving(true);
     try {
       const movementId = await recordStockIn(db, selectedProduct, qty, totalCost);
-
-      Alert.alert(
-        strings.STOCK_ADDED,
-        strings.STOCK_ADDED_HINT(qty, selectedProduct.unit_label, selectedProduct.name),
-        [
-          {
-            text: strings.UNDO,
-            style: 'destructive',
-            onPress: async () => {
-              try {
-                await undoStockIn(db, movementId);
-                onComplete();
-              } catch (error) {
-                console.error('Undo stock-in error:', error);
-                Alert.alert(strings.ERROR_TITLE, strings.ERROR_UNDO_STOCK);
-                setSaving(false);
-              }
-            },
-          },
-          { text: strings.DONE, onPress: onComplete },
-        ]
-      );
+      setSavedMovementId(movementId);
+      setSaving(false);
     } catch (error) {
       console.error('Save error:', error);
       Alert.alert(strings.ERROR_TITLE, strings.ERROR_SAVE_STOCK);
@@ -99,19 +106,58 @@ export function StockInScreen({
     }
   };
 
+  const handleUndo = async () => {
+    if (savedMovementId == null) return;
+    setSaving(true);
+    try {
+      await undoStockIn(db, savedMovementId);
+      onComplete();
+    } catch (error) {
+      console.error('Undo stock-in error:', error);
+      Alert.alert(strings.ERROR_TITLE, strings.ERROR_UNDO_STOCK);
+      setSaving(false);
+    }
+  };
+
+  if (savedMovementId != null && selectedProduct) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <StatusBar style="dark" />
+        <ScrollView contentContainerStyle={styles.resultsContainer}>
+          <Text accessibilityRole="header" style={styles.resultsTitle}>{strings.STOCK_ADDED}</Text>
+          <Text style={styles.resultsSubtitle}>
+            {strings.STOCK_ADDED_HINT(qty, selectedProduct.unit_label, selectedProduct.name)}
+          </Text>
+          <TouchableOpacity
+            style={styles.doneButton}
+            accessibilityRole="button"
+            accessibilityLabel={strings.DONE}
+            onPress={onComplete}
+          >
+            <Text style={styles.doneButtonText}>{strings.DONE}</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.undoButton}
+            accessibilityRole="button"
+            accessibilityLabel={strings.UNDO}
+            accessibilityState={{ disabled: saving }}
+            disabled={saving}
+            onPress={handleUndo}
+          >
+            <Text style={styles.undoButtonText}>{strings.UNDO}</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
   // Product selection
   if (!selectedProduct) {
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar style="dark" />
 
-        <View style={styles.screenHeader}>
-          <TouchableOpacity onPress={onCancel}>
-            <Text style={styles.backButton}>{strings.CANCEL}</Text>
-          </TouchableOpacity>
-          <Text style={styles.screenTitle}>{strings.ADD_STOCK}</Text>
-          <View style={{ width: 50 }} />
-        </View>
+        <ScreenHeader title={strings.ADD_STOCK} leftLabel={strings.CANCEL} onLeft={onCancel} />
 
         <Text style={styles.sectionTitle}>{strings.WHAT_DID_YOU_BUY}</Text>
 
@@ -130,12 +176,18 @@ export function StockInScreen({
           <TextInput
             style={styles.searchInput}
             placeholder={strings.SEARCH_PRODUCTS}
-            placeholderTextColor="#999"
+            placeholderTextColor={color.inkMuted}
+            accessibilityLabel={strings.SEARCH_PRODUCTS}
             value={productSearch}
             onChangeText={setProductSearch}
           />
           {productSearch.length > 0 && (
-            <TouchableOpacity style={styles.searchClear} onPress={() => setProductSearch('')}>
+            <TouchableOpacity
+              style={styles.searchClear}
+              accessibilityRole="button"
+              accessibilityLabel={strings.CANCEL}
+              onPress={() => setProductSearch('')}
+            >
               <Text style={styles.searchClearText}>✕</Text>
             </TouchableOpacity>
           )}
@@ -149,6 +201,9 @@ export function StockInScreen({
               testID={`stockin-product-${product.id}`}
               key={product.id}
               style={styles.productSelectItem}
+              accessibilityRole="button"
+              accessibilityLabel={product.name}
+              accessibilityHint={strings.IN_STOCK(product.current_qty, product.unit_label)}
               onPress={() => chooseProduct(product)}
             >
               <Text style={styles.productName}>{product.name}</Text>
@@ -172,17 +227,15 @@ export function StockInScreen({
     <SafeAreaView style={styles.container}>
       <StatusBar style="dark" />
 
-      <View style={styles.screenHeader}>
-        <TouchableOpacity onPress={() => {
+      <ScreenHeader
+        title={strings.ADD_STOCK}
+        leftLabel={strings.BACK}
+        onLeft={() => {
           setSelectedProduct(null);
           setQuantity('');
           setCost('');
-        }}>
-          <Text style={styles.backButton}>{strings.BACK}</Text>
-        </TouchableOpacity>
-        <Text style={styles.screenTitle}>{strings.ADD_STOCK}</Text>
-        <View style={{ width: 50 }} />
-      </View>
+        }}
+      />
 
       <View style={styles.selectedProductBanner}>
         <Text style={styles.selectedProductName}>{selectedProduct.name}</Text>
@@ -191,14 +244,15 @@ export function StockInScreen({
         </Text>
       </View>
 
-      <ScrollView style={styles.formContainer}>
+      <KeyboardForm style={styles.formContainer}>
         <Text style={styles.inputLabel}>{strings.HOW_MANY_BOUGHT}</Text>
         <View style={styles.priceInputRow}>
           <TextInput
             testID="stockin-quantity"
             style={styles.quantityInput}
             placeholder="0"
-            placeholderTextColor="#999"
+            placeholderTextColor={color.inkMuted}
+            accessibilityLabel={strings.HOW_MANY_BOUGHT}
             keyboardType="number-pad"
             value={quantity}
             onChangeText={setQuantity}
@@ -210,18 +264,24 @@ export function StockInScreen({
         <View style={styles.costModeRow}>
           <TouchableOpacity
             style={[styles.costModeButton, costMode === 'total' && styles.costModeButtonActive]}
+            accessibilityRole="radio"
+            accessibilityLabel={strings.COST_MODE_TOTAL}
+            accessibilityState={{ selected: costMode === 'total' }}
             onPress={() => setCostMode('total')}
           >
             <Text style={[styles.costModeText, costMode === 'total' && styles.costModeTextActive]}>
-              {strings.COST_MODE_TOTAL}
+              {costMode === 'total' ? `✓ ${strings.COST_MODE_TOTAL}` : strings.COST_MODE_TOTAL}
             </Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.costModeButton, costMode === 'each' && styles.costModeButtonActive]}
+            accessibilityRole="radio"
+            accessibilityLabel={strings.COST_MODE_EACH}
+            accessibilityState={{ selected: costMode === 'each' }}
             onPress={() => setCostMode('each')}
           >
             <Text style={[styles.costModeText, costMode === 'each' && styles.costModeTextActive]}>
-              {strings.COST_MODE_EACH}
+              {costMode === 'each' ? `✓ ${strings.COST_MODE_EACH}` : strings.COST_MODE_EACH}
             </Text>
           </TouchableOpacity>
         </View>
@@ -234,7 +294,8 @@ export function StockInScreen({
           <TextInput
             style={styles.priceInput}
             placeholder="0.00"
-            placeholderTextColor="#999"
+            placeholderTextColor={color.inkMuted}
+            accessibilityLabel={costMode === 'each' ? strings.COST_PER_ITEM : strings.TOTAL_COST}
             keyboardType="decimal-pad"
             value={cost}
             onChangeText={setCost}
@@ -257,12 +318,15 @@ export function StockInScreen({
           ]}
           onPress={handleSave}
           disabled={!canSave || saving}
+          accessibilityRole="button"
+          accessibilityLabel={strings.SAVE_STOCK_IN}
+          accessibilityState={{ disabled: !canSave || saving, busy: saving }}
         >
           <Text style={styles.saveButtonText}>
             {saving ? strings.SAVING : strings.SAVE_STOCK_IN}
           </Text>
         </TouchableOpacity>
-      </ScrollView>
+      </KeyboardForm>
     </SafeAreaView>
   );
 }

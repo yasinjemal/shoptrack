@@ -10,11 +10,9 @@
 
 import React, { useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
   SafeAreaView,
   ScrollView,
   Text,
-  TouchableOpacity,
   View,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -30,6 +28,8 @@ import {
 import { loadExpenses, loadMovements, toCoreProduct, type AppProduct } from '../../core/db';
 import { styles } from '../styles';
 import type { Strings } from '../../i18n';
+import { LoadingState } from '../components/LoadingState';
+import { ScreenHeader } from '../components/ScreenHeader';
 
 // How far back to load movements beyond the reporting period. The engine
 // needs prior history to establish an opening quantity for each product.
@@ -240,9 +240,7 @@ export function WeeklySummaryScreen({
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#4CAF50" />
-        </View>
+        <LoadingState label={strings.WEEKLY_SUMMARY} />
       </SafeAreaView>
     );
   }
@@ -424,13 +422,7 @@ export function WeeklySummaryScreen({
     <SafeAreaView style={styles.container}>
       <StatusBar style="dark" />
 
-      <View style={styles.screenHeader}>
-        <TouchableOpacity onPress={onBack}>
-          <Text style={styles.backButton}>{strings.BACK}</Text>
-        </TouchableOpacity>
-        <Text style={styles.screenTitle}>{strings.WEEKLY_SUMMARY}</Text>
-        <View style={{ width: 50 }} />
-      </View>
+      <ScreenHeader title={strings.WEEKLY_SUMMARY} leftLabel={strings.BACK} onLeft={onBack} />
 
       <ScrollView style={styles.weeklyScroll}>
         {renderContent()}

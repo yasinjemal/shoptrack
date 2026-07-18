@@ -71,6 +71,17 @@ function describe(d: DatabaseSync, table: string) {
     .join('\n');
 }
 
+function referenceSchema(): string {
+  return readFileSync(join(REPO_ROOT, 'database', 'schema.sql'), 'utf8');
+}
+
+/** Derive the exact pre-media v10 reference even after schema.sql moves to v11. */
+function schemaAtV10(): string {
+  return referenceSchema()
+    .replace(/^\s*photo_path\s+TEXT[^\n]*\r?\n/gm, '')
+    .replace(/^\s*receipt_photo_path\s+TEXT[^\n]*\r?\n/gm, '');
+}
+
 /**
  * Reconstruct an older schema from database/schema.sql by stripping what did
  * not exist yet.
@@ -83,7 +94,7 @@ function describe(d: DatabaseSync, table: string) {
 function historicalSchema(
   omit: { withoutDueAt?: boolean; withoutSalesEntries?: boolean }
 ): string {
-  let sql = readFileSync(join(REPO_ROOT, 'database', 'schema.sql'), 'utf8');
+  let sql = schemaAtV10();
 
   // Everything after v6 is stripped unconditionally: every historical era
   // these tests reconstruct predates the settings table (v7), the mobile-money
@@ -139,6 +150,13 @@ async function run() {
   const productCols = (freshRaw.prepare('PRAGMA table_info(products)').all() as ColumnInfo[])
     .map(c => c.name);
   check(productCols.includes('barcode'), 'products.barcode exists');
+  check(productCols.includes('photo_path'), 'products.photo_path exists');
+  const customerCols = (freshRaw.prepare('PRAGMA table_info(customers)').all() as ColumnInfo[])
+    .map(c => c.name);
+  check(customerCols.includes('photo_path'), 'customers.photo_path exists');
+  const expenseCols = (freshRaw.prepare('PRAGMA table_info(expenses)').all() as ColumnInfo[])
+    .map(c => c.name);
+  check(expenseCols.includes('receipt_photo_path'), 'expenses.receipt_photo_path exists');
 
   freshRaw.exec(`INSERT INTO products (name, barcode) VALUES ('One', '600100000001')`);
   let duplicateBarcodeRejected = false;
@@ -148,7 +166,7 @@ async function run() {
   freshRaw.exec('DELETE FROM products');
   const indexes = (freshRaw.prepare(
     `SELECT name FROM sqlite_master WHERE type = 'index'`
-  ).all() as Array<{ name: string }>).map(row => row.name);
+  ).all() as { name: string }[]).map(row => row.name);
   check(indexes.includes('idx_movements_product_type_date'), 'movement history has a composite product/type/date index');
   check(indexes.includes('idx_credit_customer_date'), 'credit history has a composite customer/date index');
 
@@ -231,6 +249,79 @@ async function run() {
 
   const kept = freshRaw.prepare('SELECT COUNT(*) as c FROM products').get() as { c: number };
   equal(kept.c, 1, 'products survive a normal reopen');
+
+  console.log('');
+  console.log('========================================');
+  console.log('TEST: a v10 database gains logical media paths without losing data');
+  console.log('========================================');
+
+  // database/schema.sql is the last committed v10 shape while this migration
+  // is developed. Build that exact shape, not a current database with a lower
+  // version stamp: otherwise a missing ALTER could never be detected.
+  const v10Raw = new DatabaseSync(':memory:');
+  v10Raw.exec(schemaAtV10());
+  v10Raw.exec(`
+    PRAGMA user_version = 10;
+    INSERT INTO products (id, name, current_qty, created_at, updated_at)
+      VALUES (101, 'Kept product', 9, 1, 1);
+    INSERT INTO customers (id, name, created_at, updated_at)
+      VALUES (102, 'Kept customer', 1, 1);
+    INSERT INTO expenses (id, category, amount, notes, recorded_at)
+      VALUES (103, 'RENT', 250, 'Kept expense', 2);
+    -- Simulate a phone interrupted halfway through v10 -> v11: one ALTER
+    -- completed, but user_version was never advanced.
+    ALTER TABLE products ADD COLUMN photo_path TEXT;
+    UPDATE products
+      SET photo_path = 'shoptrack-media/product-99999999-9999-4999-8999-999999999999.jpg'
+      WHERE id = 101;
+  `);
+
+  await initDatabase(adapt(v10Raw));
+
+  equal(
+    (v10Raw.prepare('PRAGMA user_version').get() as { user_version: number }).user_version,
+    SCHEMA_VERSION,
+    'v10 is stamped current'
+  );
+  equal(
+    (v10Raw.prepare('SELECT current_qty FROM products WHERE id = 101').get() as { current_qty: number }).current_qty,
+    9,
+    'v10 product row survives'
+  );
+  equal(
+    (v10Raw.prepare('SELECT name FROM customers WHERE id = 102').get() as { name: string }).name,
+    'Kept customer',
+    'v10 customer row survives'
+  );
+  equal(
+    (v10Raw.prepare('SELECT amount FROM expenses WHERE id = 103').get() as { amount: number }).amount,
+    250,
+    'v10 expense row survives'
+  );
+  equal(
+    (v10Raw.prepare('SELECT photo_path FROM products WHERE id = 101').get() as { photo_path: unknown }).photo_path,
+    'shoptrack-media/product-99999999-9999-4999-8999-999999999999.jpg',
+    'a partially migrated product photo column is guarded and preserved'
+  );
+  equal(
+    (v10Raw.prepare('SELECT photo_path FROM customers WHERE id = 102').get() as { photo_path: unknown }).photo_path,
+    null,
+    'migrated customer photo starts empty'
+  );
+  equal(
+    (v10Raw.prepare('SELECT receipt_photo_path FROM expenses WHERE id = 103').get() as { receipt_photo_path: unknown }).receipt_photo_path,
+    null,
+    'migrated receipt photo starts empty'
+  );
+  for (const table of TABLES) {
+    check(describe(v10Raw, table) === describe(freshRaw, table), `v10 -> current: ${table} matches a fresh install`);
+  }
+  await initDatabase(adapt(v10Raw));
+  equal(
+    (v10Raw.prepare('SELECT COUNT(*) AS count FROM products WHERE id = 101').get() as { count: number }).count,
+    1,
+    're-running v11 setup is idempotent'
+  );
 
   console.log('');
   console.log('========================================');
@@ -470,13 +561,23 @@ async function run() {
 
   console.log('');
   console.log('========================================');
-  console.log('TEST: database/schema.sql has not drifted');
+  console.log('TEST: the checked-in reference reaches the shipping shape');
   console.log('========================================');
 
-  // database/schema.sql is documentation, and documentation that quietly
-  // disagrees with the code is worse than none. Compare them for real.
+  // During the v11 change this file begins as the committed v10 reference and
+  // is expected to migrate cleanly. Once its documentation is advanced to v11,
+  // compare it directly so future drift is still caught.
   const refRaw = new DatabaseSync(':memory:');
-  refRaw.exec(readFileSync(join(REPO_ROOT, 'database', 'schema.sql'), 'utf8'));
+  refRaw.exec(referenceSchema());
+  const documentedMediaColumns = [
+    (refRaw.prepare('PRAGMA table_info(products)').all() as ColumnInfo[]).some(c => c.name === 'photo_path'),
+    (refRaw.prepare('PRAGMA table_info(customers)').all() as ColumnInfo[]).some(c => c.name === 'photo_path'),
+    (refRaw.prepare('PRAGMA table_info(expenses)').all() as ColumnInfo[]).some(c => c.name === 'receipt_photo_path'),
+  ].filter(Boolean).length;
+  if (documentedMediaColumns === 0) {
+    refRaw.exec('PRAGMA user_version = 10;');
+    await initDatabase(adapt(refRaw));
+  }
 
   for (const table of TABLES) {
     const reference = describe(refRaw, table);
@@ -484,8 +585,8 @@ async function run() {
     if (reference !== shipping) {
       failures++;
       console.error(
-        `  FAIL ${table} drifted from database/schema.sql\n` +
-        `--- database/schema.sql\n${reference}\n--- src/core/schema.ts\n${shipping}`
+        `  FAIL ${table} differs from the current/migrated reference\n` +
+        `--- database/schema.sql reference\n${reference}\n--- src/core/schema.ts\n${shipping}`
       );
     } else {
       console.log(`  ok   ${table} matches database/schema.sql`);

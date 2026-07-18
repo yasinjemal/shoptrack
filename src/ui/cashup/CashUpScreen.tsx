@@ -57,6 +57,7 @@ import { calculatePeriodSummary } from '../../core/calculations';
 import { formatMoney, getCurrentCurrency } from '../../core/currency';
 import { calculateCreditSummary } from '../../core/credit';
 import { calculateExpenseSummary } from '../../core/expenses';
+import { parseNonNegativeDecimal } from '../../core/userNumber';
 import { styles } from '../styles';
 import { cashUpStyles as cu } from './styles';
 import { buildCashUpSummary } from '../../core/messages';
@@ -65,6 +66,8 @@ import type { Strings } from '../../i18n';
 import { renderCashUpStatement } from '../../i18n/statements';
 import { SpeakButton } from '../components/SpeakButton';
 import { StaffAttribution } from '../components/StaffAttribution';
+import { ScreenHeader } from '../components/ScreenHeader';
+import { registerHardwareBackOverride } from '../navigation';
 
 export interface CashUpStrings {
   ERROR_TITLE: string;
@@ -115,7 +118,14 @@ type Step =
   | { kind: 'loading' }
   | { kind: 'first' }
   | { kind: 'counting'; inputs: CashFlowInputs; since: number; hasCount: boolean }
-  | { kind: 'result'; inputs: CashFlowInputs; trail: ExpectedCash; result: CashUpResult };
+  | {
+      kind: 'result';
+      inputs: CashFlowInputs;
+      since: number;
+      hasCount: boolean;
+      trail: ExpectedCash;
+      result: CashUpResult;
+    };
 
 const LINE_KEYS = {
   opening: 'CASHUP_LINE_OPENING',
@@ -199,22 +209,53 @@ export function CashUpScreen({
       console.error('Cash up load error:', error);
       Alert.alert(strings.ERROR_TITLE, strings.ERROR_GENERIC);
     }
-  }, [db, strings.ERROR_GENERIC]);
+  }, [db, strings.ERROR_GENERIC, strings.ERROR_TITLE]);
 
   React.useEffect(() => {
     load();
   }, [load]);
 
-  const counted = parseFloat(amount) || 0;
-  const digitalTakings = parseFloat(digitalAmount) || 0;
-  const canSubmit = amount.trim() !== '' && counted >= 0 && digitalTakings >= 0 && !saving;
+  const returnToCounting = React.useCallback(() => {
+    if (step.kind !== 'result') return false;
+    setStep({
+      kind: 'counting',
+      inputs: step.inputs,
+      since: step.since,
+      hasCount: step.hasCount,
+    });
+    return true;
+  }, [step]);
+
+  React.useEffect(
+    () => registerHardwareBackOverride(returnToCounting),
+    [returnToCounting]
+  );
+
+  const parsedCounted = parseNonNegativeDecimal(amount);
+  const digitalAmountBlank = digitalAmount.trim() === '';
+  const parsedDigitalTakings = digitalAmountBlank
+    ? 0
+    : parseNonNegativeDecimal(digitalAmount);
+  const takeOutBlank = takeOut.trim() === '';
+  const parsedTakeOut = takeOutBlank ? 0 : parseNonNegativeDecimal(takeOut);
+  const counted = parsedCounted ?? 0;
+  const digitalTakings = parsedDigitalTakings ?? 0;
+  const canSubmit = parsedCounted !== null && parsedDigitalTakings !== null && !saving;
+  const canSaveResult = parsedTakeOut !== null && !saving;
 
   const handleCheck = () => {
     if (step.kind !== 'counting' || !canSubmit) return;
     const inputs = { ...step.inputs, digitalTakings };
     const trail = calculateExpectedCash(inputs);
     const result = reconcile(trail.expected, counted, cashTurnover(inputs));
-    setStep({ kind: 'result', inputs, trail, result });
+    setStep({
+      kind: 'result',
+      inputs,
+      since: step.since,
+      hasCount: step.hasCount,
+      trail,
+      result,
+    });
   };
 
   const handleSaveFirst = async () => {
@@ -240,7 +281,7 @@ export function CashUpScreen({
   };
 
   const handleSaveResult = async () => {
-    if (step.kind !== 'result') return;
+    if (step.kind !== 'result' || !canSaveResult) return;
     if (staffRequired && recordedBy == null) {
       Alert.alert(strings.STAFF_REQUIRED);
       return;
@@ -248,7 +289,7 @@ export function CashUpScreen({
     setSaving(true);
     try {
       await recordCashUp(db, step.result, {
-        takenOut: parseFloat(takeOut) || 0,
+        takenOut: parsedTakeOut,
         digitalTakings: step.inputs.digitalTakings,
         recordedBy,
       });
@@ -284,6 +325,7 @@ export function CashUpScreen({
               value={amount}
               onChangeText={setAmount}
               placeholder="0.00"
+              accessibilityLabel={strings.CASHUP_QUESTION}
               keyboardType="decimal-pad"
               autoFocus
             />
@@ -332,6 +374,7 @@ export function CashUpScreen({
               value={amount}
               onChangeText={setAmount}
               placeholder="0.00"
+              accessibilityLabel={strings.CASHUP_QUESTION}
               keyboardType="decimal-pad"
               autoFocus
             />
@@ -345,6 +388,7 @@ export function CashUpScreen({
               value={digitalAmount}
               onChangeText={setDigitalAmount}
               placeholder="0.00"
+              accessibilityLabel={strings.CASHUP_DIGITAL_QUESTION}
               keyboardType="decimal-pad"
             />
           </View>
@@ -375,7 +419,7 @@ export function CashUpScreen({
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar style="dark" />
-        <Header title={strings.CASHUP_TITLE} onBack={onBack} strings={strings} />
+        <Header title={strings.CASHUP_TITLE} onBack={returnToCounting} strings={strings} />
 
         <ScrollView style={cu.form}>
           <View style={[cu.verdictCard, tone]}>
@@ -439,6 +483,7 @@ export function CashUpScreen({
               value={takeOut}
               onChangeText={setTakeOut}
               placeholder="0.00"
+              accessibilityLabel={strings.CASHUP_TAKE_OUT}
               keyboardType="decimal-pad"
             />
           </View>
@@ -457,9 +502,11 @@ export function CashUpScreen({
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.saveButton, saving && styles.saveButtonDisabled]}
+            style={[styles.saveButton, !canSaveResult && styles.saveButtonDisabled]}
             onPress={handleSaveResult}
-            disabled={saving}
+            disabled={!canSaveResult}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !canSaveResult, busy: saving }}
           >
             <Text style={styles.saveButtonText}>
               {saving ? strings.CASHUP_CHECKING : strings.CASHUP_DONE}
@@ -489,15 +536,7 @@ function Header({
   onBack: () => void;
   strings: CashUpStrings;
 }) {
-  return (
-    <View style={styles.screenHeader}>
-      <TouchableOpacity onPress={onBack}>
-        <Text style={styles.backButton}>{strings.CASHUP_CANCEL}</Text>
-      </TouchableOpacity>
-      <Text style={styles.screenTitle}>{title}</Text>
-      <View style={{ width: 50 }} />
-    </View>
-  );
+  return <ScreenHeader title={title} leftLabel={strings.CASHUP_CANCEL} onLeft={onBack} />;
 }
 
 function describeResult(result: CashUpResult, strings: CashUpStrings): string {

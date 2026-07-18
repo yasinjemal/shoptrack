@@ -20,10 +20,11 @@ import {
   deactivateStaffMember,
   getSetting,
   loadStaffMembers,
-  restoreBackup,
   setSetting,
   type StaffMember,
 } from '../../core/db';
+import { buildRemoteShopSnapshot, type RemoteShopSnapshot } from '../../core/remoteViewer';
+import { buildBackupPreview } from '../../core/backupPreview';
 import {
   SHOP_NAME_SETTING_KEY,
   SHOP_PHONE_SETTING_KEY,
@@ -41,13 +42,24 @@ import {
   rememberRecoveryPhrase,
   uploadEncryptedBackup,
 } from '../../net/cloudBackup';
-import { color, elevation, radius, space } from '../theme';
+import { photoBackupMediaAdapter } from '../../media/photoBackupAdapter';
+import {
+  isAutomaticCloudBackupOptedIn,
+  restoreBackupWithSafetySnapshot,
+  scheduleAutomaticCloudBackup,
+  setAutomaticCloudBackupOptIn,
+  undoRestoreFromSafetySnapshot,
+} from '../../app/dataSafety';
+import { border, color, control, elevation, radius, space, state, type } from '../theme';
 import { refreshActivationMetric } from '../../app/activation';
+import { ScreenHeader } from '../components/ScreenHeader';
 import {
   buildPartnerActivationExport,
   normaliseReferralCode,
   PARTNER_REFERRAL_SETTING,
 } from '../../core/partner';
+import { CloudBackupViewerScreen } from '../cloud/CloudBackupViewerScreen';
+import { renderBackupPreviewMessage } from '../backupPreviewMessage';
 
 export function SettingsScreen({
   db,
@@ -62,6 +74,8 @@ export function SettingsScreen({
   onShopProfileChange,
   onOwnerPinChange,
   onDataRestored,
+  remoteViewerEntitled = false,
+  automaticCloudBackupEntitled = false,
 }: {
   db: SQLiteDatabase;
   strings: Strings;
@@ -75,6 +89,10 @@ export function SettingsScreen({
   onShopProfileChange: (profile: ShopProfile) => Promise<void>;
   onOwnerPinChange: (pin: string | null) => Promise<void>;
   onDataRestored: () => Promise<void>;
+  /** Plus capability, supplied by app-level entitlement state. Fails closed. */
+  remoteViewerEntitled?: boolean;
+  /** Separate Plus gate so viewer access cannot imply background uploads. */
+  automaticCloudBackupEntitled?: boolean;
 }) {
   const [phrase, setPhrase] = useState('');
   const [restorePhrase, setRestorePhrase] = useState('');
@@ -88,6 +106,8 @@ export function SettingsScreen({
   const [shopPhone, setShopPhone] = useState('');
   const [ownerPinNew, setOwnerPinNew] = useState('');
   const [ownerPinCurrent, setOwnerPinCurrent] = useState('');
+  const [cloudViewer, setCloudViewer] = useState<RemoteShopSnapshot | null>(null);
+  const [automaticBackupOptedIn, setAutomaticBackupOptedIn] = useState(false);
   // Read once per render; onOwnerPinChange triggers a parent re-render.
   const lockEnabled = isOwnerLockEnabled();
   const cloudUrl = process.env.EXPO_PUBLIC_CLOUD_BACKUP_URL;
@@ -102,9 +122,15 @@ export function SettingsScreen({
     });
   }, []);
 
-  const refreshStaff = async () => setStaff(await loadStaffMembers(db));
+  useEffect(() => {
+    void isAutomaticCloudBackupOptedIn().then(setAutomaticBackupOptedIn);
+  }, []);
 
-  useEffect(() => { void refreshStaff(); }, [db]);
+  const refreshStaff = React.useCallback(async () => {
+    setStaff(await loadStaffMembers(db));
+  }, [db]);
+
+  useEffect(() => { void refreshStaff(); }, [refreshStaff]);
 
   useEffect(() => {
     void getSetting(db, PARTNER_REFERRAL_SETTING).then(value => setPartnerCode(value ?? ''));
@@ -140,12 +166,32 @@ export function SettingsScreen({
     if (!store || !remembered) return;
     setBusy(true);
     try {
-      await uploadEncryptedBackup(db, store, phrase);
+      await uploadEncryptedBackup(db, store, phrase, photoBackupMediaAdapter);
       Alert.alert(strings.CLOUD_UPLOAD_DONE);
     } catch {
       Alert.alert(strings.ERROR_TITLE, strings.CLOUD_ERROR);
     } finally {
       setBusy(false);
+    }
+  };
+
+  const toggleAutomaticBackup = async () => {
+    const next = !automaticBackupOptedIn;
+    try {
+      await setAutomaticCloudBackupOptIn(next);
+      setAutomaticBackupOptedIn(next);
+      if (next && store) {
+        // Enabling is an explicit request for the current state, independent
+        // of whether today's local snapshot was already created at startup.
+        scheduleAutomaticCloudBackup(db, {
+          optedIn: true,
+          entitled: automaticCloudBackupEntitled,
+          store,
+          newSnapshot: true,
+        });
+      }
+    } catch {
+      Alert.alert(strings.ERROR_TITLE, strings.CLOUD_ERROR);
     }
   };
 
@@ -158,22 +204,48 @@ export function SettingsScreen({
     setBusy(true);
     try {
       const backup = await downloadEncryptedBackup(store, restorePhrase);
-      Alert.alert(strings.CLOUD_RESTORE_READY, strings.CLOUD_RESTORE_READY_HINT, [
+      const previewMessage = renderBackupPreviewMessage(buildBackupPreview(backup), strings);
+      // The Plus viewer is projected only when entitled. Manual recovery stays
+      // available to every shop, preserving the permanently-free restore path.
+      const viewer = remoteViewerEntitled ? buildRemoteShopSnapshot(backup) : null;
+      const actions = [
         { text: strings.CANCEL, style: 'cancel' },
+        ...(viewer
+          ? [{ text: strings.CLOUD_VIEW_ACTION, onPress: () => setCloudViewer(viewer) }]
+          : []),
         {
           text: strings.RESTORE_ACTION,
           style: 'destructive',
           onPress: async () => {
             try {
-              await restoreBackup(db, backup);
+              const snapshotUri = await restoreBackupWithSafetySnapshot(db, backup);
               await onDataRestored();
-              Alert.alert(strings.CLOUD_RESTORE_DONE);
+              Alert.alert(strings.CLOUD_RESTORE_DONE, undefined, [
+                {
+                  text: strings.RESTORE_UNDO_ACTION,
+                  onPress: async () => {
+                    try {
+                      await undoRestoreFromSafetySnapshot(db, snapshotUri);
+                      await onDataRestored();
+                      Alert.alert(strings.RESTORE_UNDO_DONE);
+                    } catch {
+                      Alert.alert(strings.ERROR_TITLE, strings.CLOUD_ERROR);
+                    }
+                  },
+                },
+                { text: strings.DONE },
+              ]);
             } catch {
               Alert.alert(strings.ERROR_TITLE, strings.CLOUD_ERROR);
             }
           },
         },
-      ]);
+      ] as Parameters<typeof Alert.alert>[2];
+      Alert.alert(
+        strings.CLOUD_RESTORE_READY,
+        `${strings.CLOUD_RESTORE_READY_HINT}\n\n${previewMessage}`,
+        actions
+      );
     } catch {
       Alert.alert(strings.ERROR_TITLE, strings.CLOUD_ERROR);
     } finally {
@@ -181,14 +253,20 @@ export function SettingsScreen({
     }
   };
 
+  if (cloudViewer) {
+    return (
+      <CloudBackupViewerScreen
+        snapshot={cloudViewer}
+        strings={strings}
+        onBack={() => setCloudViewer(null)}
+      />
+    );
+  }
+
   return (
     <SafeAreaView style={settingsStyles.container}>
       <StatusBar style="dark" />
-      <View style={settingsStyles.header}>
-        <TouchableOpacity onPress={onBack}><Text style={settingsStyles.back}>{strings.BACK}</Text></TouchableOpacity>
-        <Text style={settingsStyles.title}>{strings.SETTINGS}</Text>
-        <View style={{ width: 50 }} />
-      </View>
+      <ScreenHeader title={strings.SETTINGS} leftLabel={strings.BACK} onLeft={onBack} />
       <ScrollView contentContainerStyle={settingsStyles.content}>
         <Section title={strings.SHOP_PROFILE} hint={strings.SHOP_PROFILE_HINT}>
           <TextInput
@@ -393,6 +471,28 @@ export function SettingsScreen({
                     disabled={!remembered || busy}
                     onPress={upload}
                   />
+                  <Text style={settingsStyles.hint}>{strings.CLOUD_AUTO_BACKUP_HINT}</Text>
+                  {!automaticCloudBackupEntitled ? (
+                    <>
+                      <Text style={settingsStyles.warning}>{strings.CLOUD_PLUS_REQUIRED}</Text>
+                      {automaticBackupOptedIn && (
+                        <Choice
+                          label={strings.CLOUD_AUTO_BACKUP_DISABLE}
+                          selected
+                          onPress={toggleAutomaticBackup}
+                        />
+                      )}
+                    </>
+                  ) : (
+                    <Choice
+                      label={automaticBackupOptedIn
+                        ? strings.CLOUD_AUTO_BACKUP_DISABLE
+                        : strings.CLOUD_AUTO_BACKUP_ENABLE}
+                      selected={automaticBackupOptedIn}
+                      disabled={busy || (!automaticBackupOptedIn && !remembered)}
+                      onPress={toggleAutomaticBackup}
+                    />
+                  )}
                 </>
               )}
               <TextInput
@@ -456,9 +556,15 @@ function Choice({
         disabled && settingsStyles.disabled,
       ]}
       disabled={disabled}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityHint={detail}
+      accessibilityState={{ selected, disabled }}
       onPress={() => void onPress()}
     >
-      <Text style={[settingsStyles.choiceText, selected && settingsStyles.selectedText]}>{label}</Text>
+      <Text style={[settingsStyles.choiceText, selected && settingsStyles.selectedText]}>
+        {selected ? `✓ ${label}` : label}
+      </Text>
       {detail && <Text style={settingsStyles.detail}>{detail}</Text>}
     </TouchableOpacity>
   );
@@ -481,14 +587,14 @@ const settingsStyles = StyleSheet.create({
   hint: { color: color.inkSecondary, fontSize: 15, lineHeight: 21, marginBottom: space.xs },
   wrap: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
   choice: {
-    minHeight: 52, borderWidth: 1, borderColor: color.borderStrong,
+    minHeight: control.button, borderWidth: border.hairline, borderColor: color.borderStrong,
     borderRadius: radius.md, paddingHorizontal: space.md, paddingVertical: space.sm,
     justifyContent: 'center', backgroundColor: color.surface,
   },
   compact: { minWidth: '46%', flexGrow: 1 },
-  selected: { borderColor: color.green, backgroundColor: color.greenSoft, borderWidth: 2 },
-  disabled: { opacity: 0.55, backgroundColor: color.surfaceSunken },
-  choiceText: { color: color.ink, fontSize: 17, fontWeight: '700' },
+  selected: { borderColor: color.green, backgroundColor: color.greenSoft, borderWidth: border.selected },
+  disabled: { opacity: state.disabledOpacity, backgroundColor: color.surfaceSunken },
+  choiceText: { ...type.title, color: color.ink, fontWeight: '700' },
   selectedText: { color: color.greenInk },
   detail: { color: color.inkMuted, fontSize: 13, marginTop: 2 },
   warning: { color: color.amberInk, backgroundColor: color.amberSoft, padding: space.md, borderRadius: radius.md, lineHeight: 21 },

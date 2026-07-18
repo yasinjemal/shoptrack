@@ -20,7 +20,7 @@ export interface BusinessHealthReport {
 
 export function calculateBusinessHealthReport(
   input: {
-    countSessions: Array<{ completed_at: number }>;
+    countSessions: { completed_at: number }[];
     products: AppProduct[];
     creditEntries: CreditEntry[];
     cashUps: CashUp[];

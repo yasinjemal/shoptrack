@@ -26,6 +26,7 @@ import {
   addCustomerToBook,
   addStaffMember,
   createBackup,
+  deactivateProduct,
   deactivateStaffMember,
   findStaffByPin,
   getSetting,
@@ -42,7 +43,9 @@ import {
   loadMovements,
   loadRecentProductCounts,
   loadProducts,
+  MEDIA_RESTORE_TOKEN_SETTING,
   normaliseBackup,
+  parseBackupText,
   openingBalanceFrom,
   recordCashUp,
   recordCount,
@@ -52,6 +55,9 @@ import {
   recordStockIn,
   restoreBackup,
   saveCountSession,
+  setCustomerPhotoPath,
+  setExpenseReceiptPhotoPath,
+  setProductPhotoPath,
   clearMonthDays,
   clearMonthSummary,
   deleteSalesEntry,
@@ -299,6 +305,14 @@ async function run() {
   console.log('TEST: hiding a customer keeps their history');
   console.log('========================================');
 
+  let owingCustomerRejected = false;
+  try {
+    await deactivateCustomer(db, siphoId, MONDAY + 5 * DAY);
+  } catch { owingCustomerRejected = true; }
+  check(owingCustomerRejected, 'a customer who still owes cannot be hidden');
+  equal((await loadCustomers(db)).length, 2, 'the owing customer stays visible');
+
+  await recordCreditEntry(db, siphoId, 'PAYMENT', 200, null, null, MONDAY + 5 * DAY);
   await deactivateCustomer(db, siphoId, MONDAY + 5 * DAY);
 
   const visible = await loadCustomers(db);
@@ -307,7 +321,23 @@ async function run() {
 
   // The ledger is untouched, so past totals never silently change.
   const stillThere = await loadCreditEntries(db);
-  equal(stillThere.length, 3, 'their ledger entries survive');
+  equal(stillThere.length, 4, 'their ledger entries survive');
+
+  const { db: balanceGuardDb } = await freshDb();
+  const centsCustomerId = await addCustomer(balanceGuardDb, 'Cents', null, MONDAY);
+  await recordCreditEntry(balanceGuardDb, centsCustomerId, 'CREDIT', 0.1, null, null, MONDAY);
+  await recordCreditEntry(balanceGuardDb, centsCustomerId, 'CREDIT', 0.2, null, null, MONDAY);
+  await recordCreditEntry(balanceGuardDb, centsCustomerId, 'PAYMENT', 0.3, null, null, MONDAY);
+  await deactivateCustomer(balanceGuardDb, centsCustomerId, MONDAY + DAY);
+  equal((await loadCustomers(balanceGuardDb)).length, 0, 'cent-rounded exact zero can be hidden');
+
+  const overpaidCustomerId = await addCustomer(balanceGuardDb, 'Change owed', null, MONDAY);
+  await recordCreditEntry(balanceGuardDb, overpaidCustomerId, 'PAYMENT', 1, null, null, MONDAY);
+  let overpaidCustomerRejected = false;
+  try {
+    await deactivateCustomer(balanceGuardDb, overpaidCustomerId, MONDAY + DAY);
+  } catch { overpaidCustomerRejected = true; }
+  check(overpaidCustomerRejected, 'a customer owed change cannot be hidden either');
 
   console.log('');
   console.log('========================================');
@@ -564,6 +594,66 @@ async function run() {
 
   console.log('');
   console.log('========================================');
+  console.log('TEST: media paths load and lifecycle writes return cleanup signals');
+  console.log('========================================');
+
+  const { raw: cleanupRaw, db: cleanupDb } = await freshDb();
+  const cleanupProductId = await addProduct(cleanupDb, { name: 'Photo product' }, MONDAY);
+  const cleanupCustomerId = await addCustomer(cleanupDb, 'Photo customer', null, MONDAY);
+  const cleanupExpenseId = await recordExpense(cleanupDb, 'OTHER', 10, 'Photo receipt', MONDAY);
+  const cleanupProductPhoto = 'shoptrack-media/product-11111111-1111-4111-8111-111111111111.jpg';
+  const cleanupCustomerPhoto = 'shoptrack-media/customer-22222222-2222-4222-8222-222222222222.jpg';
+  const cleanupReceiptPhoto = 'shoptrack-media/receipt-33333333-3333-4333-8333-333333333333.jpg';
+  let wrongPhotoPurposeRejected = false;
+  try {
+    await setProductPhotoPath(cleanupDb, cleanupProductId, cleanupCustomerPhoto, MONDAY);
+  } catch { wrongPhotoPurposeRejected = true; }
+  check(wrongPhotoPurposeRejected, 'a customer photo path cannot be attached to a product');
+  await setProductPhotoPath(cleanupDb, cleanupProductId, cleanupProductPhoto, MONDAY);
+  await setCustomerPhotoPath(cleanupDb, cleanupCustomerId, cleanupCustomerPhoto, MONDAY);
+  await setExpenseReceiptPhotoPath(cleanupDb, cleanupExpenseId, cleanupReceiptPhoto);
+  const secondPhotoProductId = await addProduct(cleanupDb, { name: 'Second photo product' }, MONDAY);
+  let reusedPhotoRejected = false;
+  try {
+    await setProductPhotoPath(cleanupDb, secondPhotoProductId, cleanupProductPhoto, MONDAY);
+  } catch { reusedPhotoRejected = true; }
+  check(reusedPhotoRejected, 'one managed file cannot be attached to two live records');
+
+  equal((await loadProducts(cleanupDb))[0].photo_path, cleanupProductPhoto, 'product rows expose photo_path');
+  equal((await loadCustomers(cleanupDb))[0].photo_path, cleanupCustomerPhoto, 'customer rows expose photo_path');
+  equal(
+    (await loadExpenses(cleanupDb))[0].receipt_photo_path,
+    cleanupReceiptPhoto,
+    'expense rows expose receipt_photo_path'
+  );
+  equal(
+    await deactivateProduct(cleanupDb, cleanupProductId, MONDAY + 1),
+    cleanupProductPhoto,
+    'deactivating a product returns its file cleanup path'
+  );
+  equal(
+    await deactivateCustomer(cleanupDb, cleanupCustomerId, MONDAY + 1),
+    cleanupCustomerPhoto,
+    'deactivating a customer returns its file cleanup path'
+  );
+  equal(
+    await deleteExpense(cleanupDb, cleanupExpenseId),
+    cleanupReceiptPhoto,
+    'deleting an expense returns its file cleanup path'
+  );
+  equal(
+    (cleanupRaw.prepare('SELECT photo_path FROM products WHERE id = ?').get(cleanupProductId) as { photo_path: unknown }).photo_path,
+    null,
+    'product deactivation clears the database reference'
+  );
+  equal(
+    (cleanupRaw.prepare('SELECT photo_path FROM customers WHERE id = ?').get(cleanupCustomerId) as { photo_path: unknown }).photo_path,
+    null,
+    'customer deactivation clears the database reference'
+  );
+
+  console.log('');
+  console.log('========================================');
   console.log('TEST: backup and restore covers the whole shop');
   console.log('========================================');
 
@@ -581,13 +671,13 @@ async function run() {
     1,
     MONDAY + DAY
   );
-  await addCustomerToBook(
+  const backupCustomerId = await addCustomerToBook(
     backupSource,
     { name: 'Lerato', phone: '0720000000' },
     { amount: 35, notes: 'Bread', dueAt: MONDAY + 7 * DAY },
     MONDAY + DAY
   );
-  await recordExpense(backupSource, 'TRANSPORT', 40, 'Taxi', MONDAY + DAY);
+  const backupExpenseId = await recordExpense(backupSource, 'TRANSPORT', 40, 'Taxi', MONDAY + DAY);
   const backupStaffId = await addStaffMember(backupSource, 'Sipho', '4321', MONDAY);
   await recordCashUp(
     backupSource,
@@ -604,8 +694,37 @@ async function run() {
     'PAYMENT', 15, 'paid on the phone', null, MONDAY + DAY, 'MOBILE_MONEY'
   );
 
-  const backup = await createBackup(backupSource);
-  equal(backup.backup_format_version, 6, 'backup format is independent from schema version');
+  const productPhoto = 'shoptrack-media/product-44444444-4444-4444-8444-444444444444.jpg';
+  const customerPhoto = 'shoptrack-media/customer-55555555-5555-4555-8555-555555555555.jpg';
+  const receiptPhoto = 'shoptrack-media/receipt-66666666-6666-4666-8666-666666666666.jpg';
+  await setProductPhotoPath(backupSource, backupProductId, productPhoto, MONDAY + DAY);
+  await setCustomerPhotoPath(backupSource, backupCustomerId, customerPhoto, MONDAY + DAY);
+  await setExpenseReceiptPhotoPath(backupSource, backupExpenseId, receiptPhoto);
+
+  let missingReaderRejected = false;
+  try {
+    await createBackup(backupSource);
+  } catch {
+    missingReaderRejected = true;
+  }
+  check(missingReaderRejected, 'a shop with photos cannot silently create an incomplete backup');
+
+  const jpegBase64 = '/9j/2Q=='; // JPEG SOI + EOI, encoded without wrapping.
+  const mediaFiles: Record<string, { mime_type: string; base64: string }> = {
+    [productPhoto]: { mime_type: 'image/jpeg', base64: jpegBase64 },
+    [customerPhoto]: { mime_type: 'image/jpeg', base64: jpegBase64 },
+    [receiptPhoto]: { mime_type: 'image/jpeg', base64: jpegBase64 },
+  };
+  const mediaReads: string[] = [];
+  const backup = await createBackup(backupSource, {
+    async readMedia(path) {
+      mediaReads.push(path);
+      const content = mediaFiles[path];
+      if (!content) throw new Error(`Missing fake media: ${path}`);
+      return content;
+    },
+  });
+  equal(backup.backup_format_version, 7, 'backup format is independent from schema version');
   check(backup.data.products.length > 0, 'backup includes products');
   check(backup.data.stock_movements.length > 0, 'backup includes stock movements');
   check(backup.data.count_sessions.length > 0, 'backup includes count sessions');
@@ -616,18 +735,91 @@ async function run() {
   equal(backup.data.sales_entries.length, 2, 'backup includes the sales book');
   equal(backup.data.settings.length, 1, 'backup includes settings');
   equal(backup.data.staff_members.length, 1, 'backup includes staff');
+  equal(backup.data.media.length, 3, 'backup embeds every unique referenced media file');
+  equal(mediaReads.join(','), [customerPhoto, productPhoto, receiptPhoto].sort().join(','), 'every referenced path is read once');
+  equal(backup.data.media[0].mime_type, 'image/jpeg', 'backup media MIME is explicit');
+
+  const plaintextReads: string[] = [];
+  const plaintextSharedBackup = await createBackup(
+    backupSource,
+    {
+      async readMedia(path) {
+        plaintextReads.push(path);
+        return mediaFiles[path];
+      },
+    },
+    { includeCustomerPhotos: false }
+  );
+  equal(
+    plaintextSharedBackup.data.customers[0].photo_path,
+    null,
+    'plaintext shared exports remove the customer ID-photo reference'
+  );
+  check(
+    !plaintextSharedBackup.data.media.some(asset => asset.path === customerPhoto),
+    'plaintext shared exports do not embed customer ID-photo bytes'
+  );
+  equal(
+    plaintextReads.join(','),
+    [productPhoto, receiptPhoto].sort().join(','),
+    'redacted customer photo bytes are never read into plaintext memory'
+  );
+
+  const makeRestoreAdapter = () => {
+    const state = {
+      staged: [] as { path: string; mime_type: string; base64: string }[],
+      commits: 0,
+      rollbacks: 0,
+      finalizes: 0,
+    };
+    return {
+      state,
+      adapter: {
+        async stageRestore(assets: readonly { path: string; mime_type: 'image/jpeg'; base64: string }[]) {
+          state.staged = assets.map(asset => ({ ...asset }));
+          return {
+            recoveryToken: '77777777-7777-4777-8777-777777777777',
+            async commit() { state.commits++; },
+            async rollback() { state.rollbacks++; },
+            async finalize() { state.finalizes++; },
+          };
+        },
+      },
+    };
+  };
 
   const { db: backupTarget } = await freshDb();
   // A sales entry the backup does not know about: restore must replace it,
   // not leave it mixed in with the restored book.
   await recordSales(backupTarget, 'MONTH', '2020-01', 999, 10, 'stale', MONDAY);
-  await restoreBackup(backupTarget, backup);
+  let missingRestoreAdapterRejected = false;
+  try {
+    await restoreBackup(backupTarget, backup);
+  } catch {
+    missingRestoreAdapterRejected = true;
+  }
+  check(missingRestoreAdapterRejected, 'a photo backup requires a staged restore adapter before SQL changes');
+
+  const successfulMediaRestore = makeRestoreAdapter();
+  await restoreBackup(backupTarget, backup, successfulMediaRestore.adapter);
+  equal(successfulMediaRestore.state.staged.length, 3, 'restore stages every embedded media asset');
+  equal(successfulMediaRestore.state.commits, 1, 'successful SQL restore commits staged media once');
+  equal(successfulMediaRestore.state.rollbacks, 0, 'successful restore does not roll media back');
+  equal(successfulMediaRestore.state.finalizes, 1, 'successful restore removes its media rollback snapshot');
+  equal(
+    await getSetting(backupTarget, MEDIA_RESTORE_TOKEN_SETTING),
+    null,
+    'successful restore clears its durable media recovery marker'
+  );
   equal((await loadProducts(backupTarget))[0].name, 'Bread', 'restored product round-trips');
   equal((await loadProducts(backupTarget))[0].barcode, '600100000001', 'product barcode round-trips');
+  equal((await loadProducts(backupTarget))[0].photo_path, productPhoto, 'product photo path round-trips');
   equal((await loadMovements(backupTarget)).length, backup.data.stock_movements.length, 'all movements restore');
   equal((await loadCustomers(backupTarget))[0].name, 'Lerato', 'customers restore');
+  equal((await loadCustomers(backupTarget))[0].photo_path, customerPhoto, 'customer photo path round-trips');
   equal((await loadCreditEntries(backupTarget))[0].amount, 35, 'credit ledger restores');
   equal((await loadExpenses(backupTarget))[0].amount, 40, 'expenses restore');
+  equal((await loadExpenses(backupTarget))[0].receipt_photo_path, receiptPhoto, 'receipt photo path round-trips');
   equal((await loadCashUps(backupTarget))[0].counted_amount, 200, 'cash-ups restore');
   const restoredSales = await loadSalesEntries(backupTarget);
   equal(restoredSales.length, 2, 'sales book restores');
@@ -645,26 +837,111 @@ async function run() {
 
   const brokenBackup = structuredClone(backup);
   brokenBackup.data.expenses[0].category = 'STOCK';
+  const failedMediaRestore = makeRestoreAdapter();
   let restoreRolledBack = false;
   try {
-    await restoreBackup(backupTarget, brokenBackup);
+    await restoreBackup(backupTarget, brokenBackup, failedMediaRestore.adapter);
   } catch {
     restoreRolledBack = true;
   }
   check(restoreRolledBack, 'invalid restore is rejected');
+  equal(failedMediaRestore.state.commits, 0, 'SQL failure never commits staged media');
+  equal(failedMediaRestore.state.rollbacks, 1, 'SQL failure rolls staged media back');
+  equal(failedMediaRestore.state.finalizes, 0, 'failed restore does not finalize staged media');
   equal((await loadProducts(backupTarget))[0].name, 'Bread', 'failed restore keeps existing data');
   equal((await loadExpenses(backupTarget))[0].category, 'TRANSPORT', 'failed restore rolls back every table');
 
   const brokenSalesBackup = structuredClone(backup);
   brokenSalesBackup.data.sales_entries[0].period = 'WEEK';
+  const failedSalesMediaRestore = makeRestoreAdapter();
   let salesRestoreRolledBack = false;
   try {
-    await restoreBackup(backupTarget, brokenSalesBackup);
+    await restoreBackup(backupTarget, brokenSalesBackup, failedSalesMediaRestore.adapter);
   } catch {
     salesRestoreRolledBack = true;
   }
   check(salesRestoreRolledBack, 'an invalid sales entry rejects the whole restore');
+  equal(failedSalesMediaRestore.state.rollbacks, 1, 'a later SQL failure also rolls staged media back');
   equal((await loadSalesEntries(backupTarget)).length, 2, 'failed restore keeps the existing sales book');
+
+  const corruptions: { label: string; change: (candidate: any) => void }[] = [
+    {
+      label: 'an absolute media path is rejected',
+      change(candidate) {
+        candidate.data.products[0].photo_path = '/private/bread.jpg';
+      },
+    },
+    {
+      label: 'a traversal media path is rejected',
+      change(candidate) {
+        candidate.data.products[0].photo_path = 'media/../bread.jpg';
+      },
+    },
+    {
+      label: 'a media path with the wrong record purpose is rejected',
+      change(candidate) {
+        candidate.data.products[0].photo_path = customerPhoto;
+      },
+    },
+    {
+      label: 'duplicate embedded media is rejected',
+      change(candidate) {
+        candidate.data.media.push({ ...candidate.data.media[0] });
+      },
+    },
+    {
+      label: 'a missing referenced media file is rejected',
+      change(candidate) {
+        candidate.data.media = candidate.data.media.filter((asset: any) => asset.path !== productPhoto);
+      },
+    },
+    {
+      label: 'one managed photo cannot be owned by two records',
+      change(candidate) {
+        candidate.data.products.push({
+          ...candidate.data.products[0],
+          id: 999,
+          name: 'Duplicate photo owner',
+        });
+      },
+    },
+    {
+      label: 'a non-JPEG media MIME is rejected',
+      change(candidate) {
+        candidate.data.media[0].mime_type = 'image/png';
+      },
+    },
+    {
+      label: 'non-JPEG bytes cannot hide behind a JPEG MIME',
+      change(candidate) {
+        candidate.data.media[0].base64 = 'AAAA';
+      },
+    },
+  ];
+  for (const corruption of corruptions) {
+    const candidate: any = structuredClone(backup);
+    corruption.change(candidate);
+    let rejected = false;
+    try {
+      normaliseBackup(candidate);
+    } catch {
+      rejected = true;
+    }
+    check(rejected, corruption.label);
+  }
+
+  for (const version of [1, 2, 3, 4, 5, 6]) {
+    const leakyOlderBackup: any = structuredClone(backup);
+    leakyOlderBackup.backup_format_version = version;
+    const upgraded = normaliseBackup(leakyOlderBackup);
+    check(
+      upgraded.data.products[0].photo_path === null
+        && upgraded.data.customers[0].photo_path === null
+        && upgraded.data.expenses[0].receipt_photo_path === null
+        && upgraded.data.media.length === 0,
+      `declared format ${version} cannot leak newer photo refs or embedded media`
+    );
+  }
 
   // A format-1 backup (made before the sales book existed) still restores;
   // the sales book it never knew about becomes an explicit empty set.
@@ -683,29 +960,47 @@ async function run() {
       cash_ups: backup.data.cash_ups,
     },
   });
-  equal(v1.backup_format_version, 6, 'format-1 backup is upgraded');
+  equal(v1.backup_format_version, 7, 'format-1 backup is upgraded');
   equal(v1.data.sales_entries.length, 0, 'format-1 backup gets an explicit empty sales book');
   equal(v1.data.settings.length, 0, 'format-1 backup gets explicit empty settings');
   equal(v1.data.staff_members.length, 0, 'format-1 backup gets an explicit empty staff list');
   equal(v1.data.products[0].barcode, null, 'format-1 backup cannot leak a newer barcode field');
+  equal(v1.data.products[0].photo_path, null, 'format-1 backup cannot leak a newer photo reference');
+  equal(v1.data.customers[0].photo_path, null, 'format-1 customer photos normalise to null');
+  equal(v1.data.expenses[0].receipt_photo_path, null, 'format-1 receipt photos normalise to null');
+  equal(v1.data.media.length, 0, 'format-1 backup gets an explicit empty media list');
   await restoreBackup(backupTarget, v1);
   equal((await loadSalesEntries(backupTarget)).length, 0, 'restoring a format-1 backup replaces the sales book too');
   equal(await getSetting(backupTarget, 'currency_code'), null, 'restoring a format-1 backup clears newer settings');
   equal((await loadCustomers(backupTarget))[0].name, 'Lerato', 'format-1 restore keeps its seven tables');
 
-  const legacy = normaliseBackup({
+  const legacyShape = {
     shoptrack_backup: true,
-    version: 5,
     created_at: backup.created_at,
     data: {
       products: backup.data.products,
       stock_movements: backup.data.stock_movements,
       count_sessions: backup.data.count_sessions,
     },
-  });
-  equal(legacy.backup_format_version, 6, 'legacy pre-pilot backup is upgraded');
+  };
+  for (const version of [2, 3, 4, 5]) {
+    const upgraded = normaliseBackup({ ...legacyShape, version });
+    equal(upgraded.backup_format_version, 7, `legacy schema-v${version} backup is upgraded`);
+  }
+  const legacy = normaliseBackup({ ...legacyShape, version: 2 });
   equal(legacy.data.customers.length, 0, 'missing legacy tables become explicit empty sets');
   equal(legacy.data.sales_entries.length, 0, 'legacy backups get an explicit empty sales book');
+
+  const withBom = parseBackupText(`\uFEFF  ${JSON.stringify(backup)}\n`);
+  equal(withBom.data.products[0].name, 'Bread', 'Android/Drive UTF-8 marker is ignored');
+
+  let unsupportedLegacyRejected = false;
+  try {
+    normaliseBackup({ ...legacyShape, version: 1 });
+  } catch {
+    unsupportedLegacyRejected = true;
+  }
+  check(unsupportedLegacyRejected, 'an unknown pre-export schema stamp still fails closed');
 
   console.log('');
   console.log('========================================');

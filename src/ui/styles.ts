@@ -10,7 +10,7 @@
 
 import { StyleSheet } from 'react-native';
 
-import { color, elevation, radius, space, touch, type } from './theme';
+import { color, control, elevation, icon, numeric, radius, space, touch, type } from './theme';
 
 export const styles = StyleSheet.create({
   // Loading
@@ -84,6 +84,7 @@ export const styles = StyleSheet.create({
   },
   profitValue: {
     ...type.hero,
+    ...numeric,
     color: color.greenInk,
   },
 
@@ -101,6 +102,7 @@ export const styles = StyleSheet.create({
     alignItems: 'center',
   },
   statValue: {
+    ...numeric,
     fontSize: 24,
     fontWeight: '700',
     color: color.ink,
@@ -181,6 +183,7 @@ export const styles = StyleSheet.create({
     marginBottom: 2,
   },
   shortfallAmount: {
+    ...numeric,
     fontSize: 26,
     fontWeight: '700',
     color: color.redInk,
@@ -272,6 +275,7 @@ export const styles = StyleSheet.create({
   },
   salesCardAmount: {
     ...type.amount,
+    ...numeric,
     color: color.greenInk,
   },
   salesCardHint: {
@@ -297,6 +301,7 @@ export const styles = StyleSheet.create({
     marginBottom: 4,
   },
   creditCardAmount: {
+    ...numeric,
     fontSize: 26,
     fontWeight: '700',
     color: color.amberInk,
@@ -327,6 +332,7 @@ export const styles = StyleSheet.create({
     marginBottom: 4,
   },
   stockValueAmount: {
+    ...numeric,
     fontSize: 22,
     fontWeight: '600',
     color: color.inkSecondary,
@@ -400,13 +406,14 @@ export const styles = StyleSheet.create({
     padding: space.xl,
     borderRadius: radius.lg,
     alignItems: 'center',
+    minHeight: control.heroButton,
     ...elevation.action,
   },
   primaryActionPressed: {
     backgroundColor: color.greenPressed,
   },
   primaryActionIcon: {
-    fontSize: 32,
+    fontSize: icon.lg,
     marginBottom: space.sm,
   },
   primaryActionText: {
@@ -419,9 +426,8 @@ export const styles = StyleSheet.create({
     opacity: 0.92,
     marginTop: space.xs,
   },
-  // Wraps into a grid rather than a single row. With five actions, `flex: 1`
-  // in a fixed row gives each about 56dp on a small phone and the labels get
-  // clipped. flexBasis puts three per row and lets the last row grow to fill.
+  // Two columns keep long translated labels and 200% text usable. The primary
+  // Count action stays full width above them, so the hierarchy remains clear.
   secondaryActions: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -429,10 +435,10 @@ export const styles = StyleSheet.create({
   },
   secondaryAction: {
     flexGrow: 1,
-    flexBasis: '30%',
+    flexBasis: '44%',
     // Comfortably past the 44pt minimum touch target, one-handed.
-    minWidth: 96,
-    minHeight: 96,
+    minWidth: 128,
+    minHeight: 112,
     backgroundColor: color.surface,
     paddingVertical: space.base,
     paddingHorizontal: space.md,
@@ -445,7 +451,7 @@ export const styles = StyleSheet.create({
     backgroundColor: color.surfaceSunken,
   },
   secondaryActionIcon: {
-    fontSize: 24,
+    fontSize: icon.md,
     marginBottom: space.sm,
   },
   secondaryActionText: {
@@ -585,16 +591,16 @@ export const styles = StyleSheet.create({
     borderBottomColor: color.border,
   },
   screenTitle: {
-    fontSize: 18,
-    fontWeight: '600',
+    ...type.title,
+    flexShrink: 1,
     color: color.ink,
   },
   backButton: {
-    fontSize: 16,
+    ...type.body,
     color: color.greenInk,
   },
   addButton: {
-    fontSize: 16,
+    ...type.bodyStrong,
     color: color.greenInk,
     fontWeight: '600',
   },
@@ -638,6 +644,15 @@ export const styles = StyleSheet.create({
   },
   productItemContent: {
     flex: 1,
+    minWidth: 0,
+  },
+  productThumbnail: {
+    width: 52,
+    height: 52,
+    borderRadius: 8,
+    marginRight: 12,
+    backgroundColor: color.surfaceSunken,
+    flexShrink: 0,
   },
   productEditHint: {
     fontSize: 20,
@@ -682,8 +697,9 @@ export const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     borderColor: color.border,
-    padding: 16,
-    fontSize: 17,
+    padding: space.base,
+    minHeight: control.input,
+    ...type.body,
     color: color.ink,
   },
   priceInputRow: {
@@ -693,7 +709,8 @@ export const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     borderColor: color.border,
-    paddingHorizontal: 16,
+    paddingHorizontal: space.base,
+    minHeight: control.input,
   },
   currencyPrefix: {
     fontSize: 20,
@@ -730,6 +747,8 @@ export const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     marginTop: 32,
+    minHeight: control.button,
+    justifyContent: 'center',
   },
   saveButtonDisabled: {
     backgroundColor: color.borderStrong,
@@ -842,6 +861,72 @@ export const styles = StyleSheet.create({
     color: color.redInk,
   },
 
+  // Reusable private photo field
+  photoField: {
+    marginTop: 8,
+  },
+  photoFieldPreview: {
+    width: '100%',
+    height: 180,
+    borderRadius: 12,
+    backgroundColor: color.surfaceSunken,
+    borderWidth: 1,
+    borderColor: color.border,
+  },
+  photoFieldActionLabel: {
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: '600',
+    color: color.inkSecondary,
+    marginTop: 10,
+    marginBottom: 8,
+  },
+  photoFieldActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  photoFieldButton: {
+    minHeight: 48,
+    minWidth: 132,
+    flexGrow: 1,
+    flexBasis: '46%',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: color.green,
+    backgroundColor: color.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  photoFieldButtonText: {
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '600',
+    color: color.greenInk,
+    textAlign: 'center',
+  },
+  photoFieldRemove: {
+    minHeight: 44,
+    alignSelf: 'flex-start',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+    marginTop: 4,
+  },
+  photoFieldRemoveText: {
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: '600',
+    color: color.redInk,
+  },
+  photoFieldHint: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: color.inkMuted,
+    marginTop: 4,
+  },
+
   // Count screen
   countInstructions: {
     backgroundColor: color.surface,
@@ -881,6 +966,15 @@ export const styles = StyleSheet.create({
   },
   countItemInfo: {
     flex: 1,
+    minWidth: 0,
+  },
+  countProductThumbnail: {
+    width: 44,
+    height: 44,
+    borderRadius: 8,
+    marginRight: 10,
+    backgroundColor: color.surfaceSunken,
+    flexShrink: 0,
   },
   countItemName: {
     fontSize: 17,
@@ -917,14 +1011,14 @@ export const styles = StyleSheet.create({
 
   // Results screen
   resultsContainer: {
-    flex: 1,
+    flexGrow: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 32,
+    padding: space['2xl'],
   },
   resultsIcon: {
-    fontSize: 64,
-    marginBottom: 16,
+    fontSize: icon.xl,
+    marginBottom: space.base,
   },
   resultsTitle: {
     fontSize: 28,
@@ -965,9 +1059,21 @@ export const styles = StyleSheet.create({
     marginBottom: 8,
   },
   profitResultValue: {
+    ...numeric,
     fontSize: 48,
     fontWeight: '700',
     color: color.onAction,
+  },
+  resultConfidenceCount: {
+    ...type.caption,
+    color: color.onActionMuted,
+    marginTop: space.sm,
+  },
+  resultConfidenceLevel: {
+    ...type.caption,
+    color: color.onActionMuted,
+    fontStyle: 'italic',
+    marginTop: 2,
   },
   profitExplainerText: {
     fontSize: 15,
@@ -1372,6 +1478,7 @@ export const styles = StyleSheet.create({
     marginBottom: 4,
   },
   weeklyProfit: {
+    ...numeric,
     fontSize: 32,
     fontWeight: '700',
     color: color.greenInk,

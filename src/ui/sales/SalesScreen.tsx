@@ -30,6 +30,8 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import type { SQLiteDatabase } from 'expo-sqlite';
 import { formatMoney, getCurrentCurrency } from '../../core/currency';
+import { localCalendarDayLabel } from '../../core/localDate';
+import { parseNonNegativeDecimal } from '../../core/userNumber';
 
 import {
   calculateSalesHistory,
@@ -37,14 +39,20 @@ import {
   formatMonth,
   DEFAULT_MARGIN_PCT,
   type MonthlySales,
+  type SalesChange,
   type SalesEntry,
   type SalesHistory,
+  type SalesStatistics,
 } from '../../core/sales';
 import { clearMonthSummary, loadSalesEntries, recordSales } from '../../core/db';
 import { MonthCalendar, YearPicker } from './MonthCalendar';
 import { styles } from '../styles';
 import { color } from '../theme';
 import { salesStyles as ss } from './styles';
+import { KeyboardForm } from '../components/KeyboardForm';
+import { LoadingState } from '../components/LoadingState';
+import { ScreenHeader } from '../components/ScreenHeader';
+import { registerHardwareBackOverride } from '../navigation';
 
 export interface SalesStrings {
   BACK: string;
@@ -75,6 +83,18 @@ export interface SalesStrings {
   SALES_CONFLICT: string;
   SALES_CONFLICT_FIX: string;
   SALES_NOT_COUNTED_PROFIT: string;
+  SALES_STATS_TITLE: string;
+  SALES_STATS_FOR: (month: string) => string;
+  SALES_STATS_BEST_DAY: string;
+  SALES_STATS_QUIETEST_DAY: string;
+  SALES_STATS_NO_DAILY: string;
+  SALES_STATS_MONTH_CHANGE: string;
+  SALES_STATS_VS_MONTH: (change: string, month: string) => string;
+  SALES_STATS_NO_PREVIOUS_MONTH: string;
+  SALES_STATS_YTD: string;
+  SALES_STATS_YTD_COVERAGE: (recorded: number, elapsed: number, month: string) => string;
+  SALES_STATS_VS_YEAR: (change: string, year: number, recorded: number) => string;
+  SALES_STATS_NO_PREVIOUS_YEAR: string;
 }
 
 type Mode =
@@ -125,6 +145,13 @@ export function SalesScreen({
   React.useEffect(() => {
     refresh();
   }, [refresh]);
+
+  React.useEffect(() => registerHardwareBackOverride(() => {
+    if (mode.kind === 'list' || (mode.kind === 'today' && todayOnly)) return false;
+    if (mode.kind === 'fill_month') setMode({ kind: 'pick_month' });
+    else setMode({ kind: 'list' });
+    return true;
+  }), [mode.kind, todayOnly]);
 
   const done = async () => {
     await refresh();
@@ -180,15 +207,9 @@ export function SalesScreen({
     <SafeAreaView style={styles.container}>
       <StatusBar style="dark" />
 
-      <View style={styles.screenHeader}>
-        <Pressable onPress={onBack} hitSlop={8}>
-          <Text style={styles.backButton}>{strings.BACK}</Text>
-        </Pressable>
-        <Text style={styles.screenTitle}>{strings.SALES_TITLE}</Text>
-        <View style={{ width: 50 }} />
-      </View>
+      <ScreenHeader title={strings.SALES_TITLE} leftLabel={strings.BACK} onLeft={onBack} />
 
-      {loading || !history ? null : (
+      {loading || !history ? <LoadingState label={strings.SALES_TITLE} /> : (
         <ScrollView style={ss.list}>
           {history.months_recorded === 0 ? (
             <View style={styles.emptyState}>
@@ -209,6 +230,10 @@ export function SalesScreen({
                   )}
                 </Text>
               </View>
+
+              {history.statistics && (
+                <SalesStatisticsCard statistics={history.statistics} strings={strings} />
+              )}
 
               {history.conflicts.length > 0 && (
                 <View style={ss.conflictCard}>
@@ -244,6 +269,8 @@ export function SalesScreen({
             <Pressable
               style={({ pressed }) => [ss.primaryButton, pressed && ss.primaryButtonPressed]}
               android_ripple={{ color: color.ripple }}
+              accessibilityRole="button"
+              accessibilityLabel={strings.SALES_TODAY}
               onPress={() => setMode({ kind: 'today' })}
             >
               <Text style={ss.primaryButtonText}>{strings.SALES_TODAY}</Text>
@@ -252,6 +279,8 @@ export function SalesScreen({
             <Pressable
               style={({ pressed }) => [ss.secondaryButton, pressed && ss.secondaryButtonPressed]}
               android_ripple={{ color: color.ripple }}
+              accessibilityRole="button"
+              accessibilityLabel={strings.SALES_BACKFILL}
               onPress={() => setMode({ kind: 'pick_month' })}
             >
               <Text style={ss.secondaryButtonText}>{strings.SALES_BACKFILL}</Text>
@@ -263,6 +292,95 @@ export function SalesScreen({
       )}
     </SafeAreaView>
   );
+}
+
+function SalesStatisticsCard({
+  statistics,
+  strings,
+}: {
+  statistics: SalesStatistics;
+  strings: SalesStrings;
+}) {
+  const { highest_day: highest, lowest_day: lowest, month_over_month: monthChange } = statistics;
+  const ytd = statistics.year_to_date;
+
+  return (
+    <View style={ss.statisticsCard}>
+      <Text style={ss.statisticsTitle}>{strings.SALES_STATS_TITLE}</Text>
+      <Text style={ss.statisticsPeriod}>
+        {strings.SALES_STATS_FOR(formatMonth(statistics.month_key))}
+      </Text>
+
+      {highest && lowest ? (
+        <View style={ss.statisticsDays}>
+          <View style={ss.statisticsDay}>
+            <Text style={ss.statisticsLabel}>{strings.SALES_STATS_BEST_DAY}</Text>
+            <Text style={ss.statisticsValue}>{formatMoney(highest.sales)}</Text>
+            <Text style={ss.statisticsDetail}>{formatSalesDay(highest.day_key)}</Text>
+          </View>
+          <View style={ss.statisticsDay}>
+            <Text style={ss.statisticsLabel}>{strings.SALES_STATS_QUIETEST_DAY}</Text>
+            <Text style={ss.statisticsValue}>{formatMoney(lowest.sales)}</Text>
+            <Text style={ss.statisticsDetail}>{formatSalesDay(lowest.day_key)}</Text>
+          </View>
+        </View>
+      ) : (
+        <Text style={ss.statisticsHint}>{strings.SALES_STATS_NO_DAILY}</Text>
+      )}
+
+      <View style={ss.statisticsSection}>
+        <Text style={ss.statisticsLabel}>{strings.SALES_STATS_MONTH_CHANGE}</Text>
+        <Text style={ss.statisticsDetail}>
+          {monthChange
+            ? strings.SALES_STATS_VS_MONTH(
+                formatSignedChange(monthChange.sales_change),
+                formatMonth(monthChange.previous.month_key),
+              )
+            : strings.SALES_STATS_NO_PREVIOUS_MONTH}
+        </Text>
+      </View>
+
+      <View style={ss.statisticsSection}>
+        <Text style={ss.statisticsLabel}>{strings.SALES_STATS_YTD}</Text>
+        <Text style={ss.statisticsValue}>{formatMoney(ytd.current.sales)}</Text>
+        <Text style={ss.statisticsDetail}>
+          {strings.SALES_STATS_YTD_COVERAGE(
+            ytd.current.months_recorded,
+            ytd.through_month,
+            formatMonth(statistics.month_key),
+          )}
+        </Text>
+        <Text style={ss.statisticsDetail}>
+          {ytd.previous && ytd.sales_change
+            ? strings.SALES_STATS_VS_YEAR(
+                formatSignedChange(ytd.sales_change),
+                ytd.previous.year,
+                ytd.previous.months_recorded,
+              )
+            : strings.SALES_STATS_NO_PREVIOUS_YEAR}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function formatSalesDay(key: string): string {
+  const [year, month, day] = key.split('-').map(Number);
+  const gregorian = new Date(year, month - 1, day).toLocaleDateString(undefined, {
+    day: 'numeric',
+    month: 'short',
+  });
+  const local = localCalendarDayLabel(key);
+  return local ? `${gregorian} · ${local}` : gregorian;
+}
+
+function formatSignedChange(change: SalesChange): string {
+  if (change.direction === 'same') return formatMoney(0);
+  const sign = change.direction === 'up' ? '+' : '−';
+  const percentage = change.percent == null
+    ? ''
+    : ` (${sign}${Math.abs(change.percent).toFixed(1)}%)`;
+  return `${sign}${formatMoney(Math.abs(change.amount))}${percentage}`;
 }
 
 function MonthRow({ month, strings }: { month: MonthlySales; strings: SalesStrings }) {
@@ -317,10 +435,12 @@ function EntryScreen({
   const [margin, setMargin] = useState(String(lastMargin ?? DEFAULT_MARGIN_PCT));
   const [saving, setSaving] = useState(false);
 
-  const takings = parseFloat(amount) || 0;
-  const marginPct = parseFloat(margin);
-  const marginValid = !Number.isNaN(marginPct) && marginPct >= 0 && marginPct <= 100;
-  const canSave = amount.trim() !== '' && takings >= 0 && marginValid && !saving;
+  const parsedTakings = parseNonNegativeDecimal(amount);
+  const parsedMargin = parseNonNegativeDecimal(margin);
+  const takings = parsedTakings ?? 0;
+  const marginPct = parsedMargin ?? 0;
+  const marginValid = parsedMargin !== null && marginPct <= 100;
+  const canSave = parsedTakings !== null && marginValid && !saving;
 
   const keeps = marginValid ? takings * (marginPct / 100) : 0;
 
@@ -341,15 +461,9 @@ function EntryScreen({
     <SafeAreaView style={styles.container}>
       <StatusBar style="dark" />
 
-      <View style={styles.screenHeader}>
-        <Pressable onPress={onCancel} hitSlop={8}>
-          <Text style={styles.backButton}>{strings.SALES_CANCEL}</Text>
-        </Pressable>
-        <Text style={styles.screenTitle}>{strings.SALES_TODAY}</Text>
-        <View style={{ width: 50 }} />
-      </View>
+      <ScreenHeader title={strings.SALES_TODAY} leftLabel={strings.SALES_CANCEL} onLeft={onCancel} />
 
-      <ScrollView style={ss.form} keyboardShouldPersistTaps="handled">
+      <KeyboardForm style={ss.form}>
         <Text style={styles.inputLabel}>{strings.SALES_TOOK_TODAY}</Text>
         <View style={styles.priceInputRow}>
           <Text style={styles.currencyPrefix}>{getCurrentCurrency().symbol}</Text>
@@ -360,6 +474,7 @@ function EntryScreen({
             placeholder="0.00"
             keyboardType="decimal-pad"
             autoFocus
+            accessibilityLabel={strings.SALES_TOOK_TODAY}
           />
         </View>
 
@@ -373,6 +488,7 @@ function EntryScreen({
                 onChangeText={setMargin}
                 placeholder="25"
                 keyboardType="number-pad"
+                accessibilityLabel={strings.SALES_MARGIN}
               />
               <Text style={styles.currencyPrefix}>%</Text>
             </View>
@@ -400,6 +516,9 @@ function EntryScreen({
           ]}
           onPress={handleSave}
           disabled={!canSave}
+          accessibilityRole="button"
+          accessibilityLabel={strings.SALES_SAVE}
+          accessibilityState={{ disabled: !canSave, busy: saving }}
         >
           <Text style={styles.saveButtonText}>
             {saving ? strings.SALES_SAVING : strings.SALES_SAVE}
@@ -407,7 +526,7 @@ function EntryScreen({
         </Pressable>
 
         <View style={{ height: 32 }} />
-      </ScrollView>
+      </KeyboardForm>
     </SafeAreaView>
   );
 }

@@ -11,6 +11,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Alert,
+  Image,
   SafeAreaView,
   ScrollView,
   Share,
@@ -40,6 +41,10 @@ import { SpeakButton } from '../components/SpeakButton';
 import { VoiceNumberButton } from '../components/VoiceNumberButton';
 import { BarcodeFinderButton } from '../components/BarcodeFinderButton';
 import { StaffAttribution } from '../components/StaffAttribution';
+import { ScreenHeader } from '../components/ScreenHeader';
+import { color } from '../theme';
+import { registerHardwareBackOverride } from '../navigation';
+import { resolvePhotoUri } from '../../media/photoStore';
 
 export function CountScreen({
   products,
@@ -107,6 +112,18 @@ export function CountScreen({
     };
     loadConfidenceData();
   }, [db]);
+
+  useEffect(() => registerHardwareBackOverride(() => {
+    if (step === 'review') {
+      setStep('counting');
+      return true;
+    }
+    if (step === 'results') {
+      onComplete(isFirstCount ? null : profit);
+      return true;
+    }
+    return false;
+  }), [isFirstCount, onComplete, profit, step]);
 
   const handleSave = async () => {
     if (countedEntries.length === 0) return;
@@ -192,7 +209,7 @@ export function CountScreen({
       <SafeAreaView style={styles.container}>
         <StatusBar style="dark" />
 
-        <View style={styles.resultsContainer}>
+        <ScrollView contentContainerStyle={styles.resultsContainer}>
           <Text style={styles.resultsIcon}>{isFirstCount ? '🎉' : '✓'}</Text>
           <Text style={styles.resultsTitle}>
             {isFirstCount ? strings.FIRST_COUNT_DONE : strings.COUNT_SAVED}
@@ -218,10 +235,10 @@ export function CountScreen({
                     <Text style={styles.profitResultLabel}>{strings.YOUR_PROFIT}</Text>
                     <Text style={styles.profitResultValue}>{formatMoney(profit, 0)}</Text>
                     {/* Tier 3.2: Confidence signals */}
-                    <Text style={styles.confidenceCount}>
+                    <Text style={styles.resultConfidenceCount}>
                       {strings.BASED_ON_COUNTS(totalCountSessions)}
                     </Text>
-                    <Text style={styles.confidenceLevel}>
+                    <Text style={styles.resultConfidenceLevel}>
                       {totalCountSessions >= 4 ? strings.CONFIDENCE_RELIABLE :
                        totalCountSessions >= 2 ? strings.CONFIDENCE_CLEARER :
                        strings.CONFIDENCE_EARLY}
@@ -273,6 +290,8 @@ export function CountScreen({
           <TouchableOpacity
             testID="count-done"
             style={styles.doneButton}
+            accessibilityRole="button"
+            accessibilityLabel={isFirstCount ? strings.GOT_IT : strings.DONE}
             onPress={() => onComplete(isFirstCount ? null : profit)}
           >
             <Text style={styles.doneButtonText}>
@@ -282,6 +301,8 @@ export function CountScreen({
           {!isFirstCount && (
             <TouchableOpacity
               style={styles.dataButton}
+              accessibilityRole="button"
+              accessibilityLabel={strings.SHARE}
               onPress={() => Share.share({
                 message: renderShareMessage(
                   buildCountSummary(totalSold, profit, totalCountSessions),
@@ -294,12 +315,15 @@ export function CountScreen({
           )}
           <TouchableOpacity
             style={styles.undoButton}
+            accessibilityRole="button"
+            accessibilityLabel={strings.COUNT_UNDO}
+            accessibilityState={{ disabled: saving }}
             onPress={handleUndo}
             disabled={saving}
           >
             <Text style={styles.undoButtonText}>{strings.COUNT_UNDO}</Text>
           </TouchableOpacity>
-        </View>
+        </ScrollView>
       </SafeAreaView>
     );
   }
@@ -308,13 +332,11 @@ export function CountScreen({
     return (
       <SafeAreaView style={styles.container}>
         <StatusBar style="dark" />
-        <View style={styles.screenHeader}>
-          <TouchableOpacity onPress={() => setStep('counting')}>
-            <Text style={styles.backButton}>{strings.COUNT_GO_BACK}</Text>
-          </TouchableOpacity>
-          <Text style={styles.screenTitle}>{strings.COUNT_REVIEW_TITLE}</Text>
-          <View style={{ width: 50 }} />
-        </View>
+        <ScreenHeader
+          title={strings.COUNT_REVIEW_TITLE}
+          leftLabel={strings.COUNT_GO_BACK}
+          onLeft={() => setStep('counting')}
+        />
         <Text style={styles.reviewHint}>{strings.COUNT_REVIEW_HINT}</Text>
         <ScrollView style={styles.countList}>
           {countedEntries.map(({ product, quantity }) => {
@@ -341,6 +363,9 @@ export function CountScreen({
             style={[styles.saveCountButton, saving && styles.saveButtonDisabled]}
             onPress={handleSave}
             disabled={saving}
+            accessibilityRole="button"
+            accessibilityLabel={strings.COUNT_SAVE_BUTTON}
+            accessibilityState={{ disabled: saving, busy: saving }}
           >
             <Text style={styles.saveButtonText}>
               {saving ? strings.SAVING : strings.COUNT_SAVE_BUTTON}
@@ -356,13 +381,7 @@ export function CountScreen({
     <SafeAreaView style={styles.container}>
       <StatusBar style="dark" />
 
-      <View style={styles.screenHeader}>
-        <TouchableOpacity onPress={onCancel}>
-          <Text style={styles.backButton}>{strings.CANCEL}</Text>
-        </TouchableOpacity>
-        <Text style={styles.screenTitle}>{strings.COUNT_STOCK}</Text>
-        <View style={{ width: 50 }} />
-      </View>
+      <ScreenHeader title={strings.COUNT_STOCK} leftLabel={strings.CANCEL} onLeft={onCancel} />
 
       <View style={styles.countInstructions}>
         <Text style={styles.countInstructionsTitle}>{strings.COUNT_HEADER}</Text>
@@ -399,6 +418,17 @@ export function CountScreen({
       <ScrollView style={styles.countList}>
         {products.filter(product => foundProductId == null || product.id === foundProductId).map((product) => (
           <View key={product.id} style={styles.countItem}>
+            {product.photo_path != null && (
+              <Image
+                testID={`count-product-photo-${product.id}`}
+                source={{ uri: resolvePhotoUri(product.photo_path) }}
+                style={styles.countProductThumbnail}
+                resizeMode="cover"
+                accessible
+                accessibilityRole="image"
+                accessibilityLabel={`${strings.PRODUCT_PHOTO}: ${product.name}`}
+              />
+            )}
             <View style={styles.countItemInfo}>
               <Text style={styles.countItemName}>{product.name}</Text>
               <Text style={styles.countItemPrev}>
@@ -412,8 +442,9 @@ export function CountScreen({
                 testID={`count-input-${product.id}`}
                 style={styles.countInput}
                 placeholder="0"
-                placeholderTextColor="#CCCCCC"
+                placeholderTextColor={color.inkMuted}
                 keyboardType="number-pad"
+                accessibilityLabel={product.name}
                 value={counts[product.id] || ''}
                 onChangeText={(val) => {
                   setCounts(prev => ({ ...prev, [product.id]: val.replace(/[^0-9]/g, '') }));
@@ -437,6 +468,9 @@ export function CountScreen({
           ]}
           onPress={() => setStep('review')}
           disabled={countedCount === 0 || saving}
+          accessibilityRole="button"
+          accessibilityLabel={strings.COUNT_REVIEW_BUTTON(countedCount)}
+          accessibilityState={{ disabled: countedCount === 0 || saving, busy: saving }}
         >
           <Text style={styles.saveButtonText}>
             {strings.COUNT_REVIEW_BUTTON(countedCount)}

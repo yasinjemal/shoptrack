@@ -10,6 +10,7 @@
 
 import React, { useState } from 'react';
 import {
+  Image,
   SafeAreaView,
   ScrollView,
   Text,
@@ -23,6 +24,9 @@ import type { AppProduct } from '../../core/db';
 import { formatMoney } from '../../core/currency';
 import { styles } from '../styles';
 import type { Strings } from '../../i18n';
+import { ScreenHeader } from '../components/ScreenHeader';
+import { color } from '../theme';
+import { resolvePhotoUri } from '../../media/photoStore';
 
 export function ProductsListScreen({
   products,
@@ -51,15 +55,13 @@ export function ProductsListScreen({
     <SafeAreaView style={styles.container}>
       <StatusBar style="dark" />
 
-      <View style={styles.screenHeader}>
-        <TouchableOpacity onPress={onBack}>
-          <Text style={styles.backButton}>{strings.BACK}</Text>
-        </TouchableOpacity>
-        <Text style={styles.screenTitle}>{strings.PRODUCTS_LABEL}</Text>
-        <TouchableOpacity onPress={onAddProduct}>
-          <Text style={styles.addButton}>{strings.ADD}</Text>
-        </TouchableOpacity>
-      </View>
+      <ScreenHeader
+        title={strings.PRODUCTS_LABEL}
+        leftLabel={strings.BACK}
+        onLeft={onBack}
+        rightLabel={strings.ADD}
+        onRight={onAddProduct}
+      />
 
       {/* Search bar - only show if there are products */}
       {products.length > 0 && (
@@ -67,13 +69,16 @@ export function ProductsListScreen({
           <TextInput
             style={styles.searchInput}
             placeholder={strings.SEARCH_PRODUCTS}
-            placeholderTextColor="#999"
+            placeholderTextColor={color.inkMuted}
+            accessibilityLabel={strings.SEARCH_PRODUCTS}
             value={productSearch}
             onChangeText={value => { setProductSearch(value); setVisibleCount(50); }}
           />
           {productSearch.length > 0 && (
             <TouchableOpacity
               style={styles.searchClear}
+              accessibilityRole="button"
+              accessibilityLabel={strings.CANCEL}
               onPress={() => setProductSearch('')}
             >
               <Text style={styles.searchClearText}>✕</Text>
@@ -88,7 +93,13 @@ export function ProductsListScreen({
             <Text style={styles.readyCardTitle}>{strings.READY_TO_TRACK}</Text>
             <Text style={styles.readyCardHint}>{strings.READY_TO_TRACK_HINT}</Text>
           </View>
-          <TouchableOpacity testID="products-start-count" style={styles.readyCardButton} onPress={onStartCount}>
+          <TouchableOpacity
+            testID="products-start-count"
+            style={styles.readyCardButton}
+            accessibilityRole="button"
+            accessibilityLabel={strings.START_COUNTING}
+            onPress={onStartCount}
+          >
             <Text style={styles.readyCardButtonText}>{strings.START_COUNTING}</Text>
           </TouchableOpacity>
         </View>
@@ -99,6 +110,8 @@ export function ProductsListScreen({
           <Text style={styles.emptyStateText}>{strings.NO_PRODUCTS}</Text>
           <TouchableOpacity
             style={styles.emptyStateButton}
+            accessibilityRole="button"
+            accessibilityLabel={strings.ADD_PRODUCT}
             onPress={onAddProduct}
           >
             <Text style={styles.emptyStateButtonText}>{strings.ADD_PRODUCT}</Text>
@@ -112,8 +125,29 @@ export function ProductsListScreen({
             <TouchableOpacity
               key={product.id}
               style={styles.productItem}
+              accessibilityRole="button"
+              accessibilityLabel={product.photo_path != null
+                ? `${product.name}. ${strings.PRODUCT_PHOTO}`
+                : product.name}
+              accessibilityHint={strings.PRODUCT_META(
+                product.current_qty,
+                product.unit_label,
+                product.sell_price != null ? formatMoney(product.sell_price) : null,
+                product.buy_price != null ? formatMoney(product.buy_price) : null
+              )}
               onPress={() => onEditProduct(product)}
             >
+              {product.photo_path != null && (
+                <Image
+                  testID={`product-photo-${product.id}`}
+                  source={{ uri: resolvePhotoUri(product.photo_path) }}
+                  style={styles.productThumbnail}
+                  resizeMode="cover"
+                  accessible
+                  accessibilityRole="image"
+                  accessibilityLabel={`${strings.PRODUCT_PHOTO}: ${product.name}`}
+                />
+              )}
               <View style={styles.productItemContent}>
                 <Text style={styles.productName}>{product.name}</Text>
                 <Text style={styles.productMeta}>

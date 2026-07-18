@@ -9,6 +9,7 @@
 import {
   calculateMonth,
   calculateSalesHistory,
+  calculateSalesStatistics,
   summariseSalesBook,
   dayKey,
   dayNumber,
@@ -241,6 +242,78 @@ equal(summariseSalesBook(empty), null, 'no card on Home when there is nothing to
 
 const onlyMonth = calculateSalesHistory([month('2026-01', 1000, 25)]);
 equal(summariseSalesBook(onlyMonth)?.months, 1, 'a single month stays a numeric count for translation');
+
+// ============================================
+console.log('');
+console.log('========================================');
+console.log('TEST: honest sales comparisons');
+console.log('========================================');
+
+const comparisonBook = [
+  // Prior-year YTD deliberately has a missing February. Coverage is data, not
+  // an excuse to silently turn that month into R0.
+  month('2025-01', 700, 20),
+  month('2025-03', 900, 20),
+  month('2026-01', 1000, 20),
+  month('2026-02', 2000, 20),
+  day('2026-03-01', 500, 20),
+  day('2026-03-02', 100, 30),
+  day('2026-03-03', 500, 40),
+  day('2026-03-04', 0, 20),
+];
+const stats = calculateSalesStatistics(comparisonBook, '2026-03');
+
+equal(stats.month_key, '2026-03', 'statistics say which recorded month they describe');
+equal(stats.highest_day?.day_key, '2026-03-01', 'the earliest tied high day wins deterministically');
+equal(stats.highest_day?.sales, 500, 'the high day reports takings');
+equal(stats.highest_day?.profit, 100, 'and keeps its own snapshotted margin');
+equal(stats.lowest_day?.day_key, '2026-03-04', 'a recorded closed day is truthfully the quietest day');
+equal(stats.lowest_day?.sales, 0, 'zero is recorded data, not missing data');
+
+equal(stats.month_over_month?.previous.month_key, '2026-02', 'month comparison uses the adjacent month');
+equal(stats.month_over_month?.current.sales, 1100, 'the current daily entries are rolled up');
+equal(stats.month_over_month?.sales_change.amount, -900, 'month change is current minus previous');
+equal(stats.month_over_month?.sales_change.percent, -45, 'month percentage uses the prior month as base');
+equal(stats.month_over_month?.sales_change.direction, 'down', 'month direction is structured data');
+equal(stats.month_over_month?.profit_change.amount, -70, 'month profit change respects per-entry margins');
+equal(stats.month_over_month?.profit_change.percent, -17.5, 'month profit comparison uses prior profit as base');
+
+equal(stats.year_to_date.current.year, 2026, 'YTD names the current comparison year');
+equal(stats.year_to_date.current.sales, 4100, 'YTD totals January through the focus month');
+equal(stats.year_to_date.current.months_recorded, 3, 'YTD exposes current-year coverage');
+equal(stats.year_to_date.previous?.year, 2025, 'YTD compares the same span one year earlier');
+equal(stats.year_to_date.previous?.sales, 1600, 'prior YTD uses only actual recorded months');
+equal(stats.year_to_date.previous?.months_recorded, 2, 'missing prior months remain visible as missing');
+equal(stats.year_to_date.sales_change?.amount, 2500, 'YTD returns an absolute comparison');
+equal(stats.year_to_date.sales_change?.percent, 156.3, 'YTD percentage is rounded at its boundary');
+equal(stats.year_to_date.profit_change?.amount, 610, 'YTD profit comparison keeps each period margin');
+equal(stats.year_to_date.profit_change?.percent, 190.6, 'YTD profit percentage is deterministic');
+
+const latestHistory = calculateSalesHistory(comparisonBook);
+equal(latestHistory.statistics?.month_key, '2026-03', 'history anchors statistics to its newest month');
+
+const noDailyDetail = calculateSalesStatistics([
+  month('2026-03', 3000),
+  month('2026-02', 0),
+], '2026-03');
+equal(noDailyDetail.highest_day, null, 'a whole-month total cannot invent a highest day');
+equal(noDailyDetail.lowest_day, null, 'a whole-month total cannot invent a lowest day');
+equal(noDailyDetail.month_over_month?.sales_change.percent, null, 'growth from zero has no fake percentage');
+equal(noDailyDetail.year_to_date.previous, null, 'no prior-year record means no YTD comparison');
+equal(noDailyDetail.year_to_date.sales_change, null, 'and no fabricated prior-year change');
+
+const gap = calculateSalesStatistics([
+  month('2026-05', 3000),
+  month('2026-03', 2000),
+], '2026-05');
+equal(gap.month_over_month, null, 'a missing adjacent month is not disguised as month-over-month');
+
+const crossing = calculateSalesStatistics([
+  month('2025-12', 1000),
+  month('2026-01', 1500),
+], '2026-01');
+equal(crossing.month_over_month?.previous.month_key, '2025-12', 'month comparison crosses a year boundary');
+equal(crossing.month_over_month?.sales_change.percent, 50, 'cross-year comparison keeps its percentage');
 
 // ============================================
 console.log('');
