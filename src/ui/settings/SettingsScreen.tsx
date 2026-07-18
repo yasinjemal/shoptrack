@@ -34,9 +34,9 @@ import {
 import { isOwnerLockEnabled, isValidOwnerPin, verifyOwnerPin } from '../../core/ownerLock';
 import { LANGUAGE_OPTIONS, type Language, type Strings } from '../../i18n';
 import {
+  createConfiguredCloudBackupStore,
   downloadEncryptedBackup,
   generateRecoveryPhrase,
-  HttpCloudBackupStore,
   isValidRecoveryPhrase,
   loadRememberedRecoveryPhrase,
   rememberRecoveryPhrase,
@@ -110,8 +110,7 @@ export function SettingsScreen({
   const [automaticBackupOptedIn, setAutomaticBackupOptedIn] = useState(false);
   // Read once per render; onOwnerPinChange triggers a parent re-render.
   const lockEnabled = isOwnerLockEnabled();
-  const cloudUrl = process.env.EXPO_PUBLIC_CLOUD_BACKUP_URL;
-  const store = useMemo(() => cloudUrl ? new HttpCloudBackupStore(cloudUrl) : null, [cloudUrl]);
+  const store = useMemo(() => createConfiguredCloudBackupStore(), []);
 
   useEffect(() => {
     void loadRememberedRecoveryPhrase().then(value => {

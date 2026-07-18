@@ -163,22 +163,36 @@ must feel identical to the pre-OFF form.
 > ShopTrack's first server. Constitution holds: accounts optional forever,
 > offline stays first-class, nothing free ever becomes paid.
 
-### C0. Decision gate (owner, not code)  `[ ]`
+### C0. Decision gate (owner, not code)  `[~]`
 
-- [ ] Supabase vs Firebase
+- [x] Supabase vs Firebase — **Supabase**, decided 2026-07-18. Rationale and
+      the resulting provisioning steps live in
+      [SUPABASE-SETUP.md](SUPABASE-SETUP.md): capped/flat cost shape vs
+      Firebase's mandatory uncapped Blaze plan, plain-HTTP fit with the
+      existing store contract, storage + auth + edge functions in one flat
+      project, S3-compatible exit path. (No SA region; London — background
+      blob traffic makes latency irrelevant.)
 - [ ] Is "account can restore *without* recovery phrase" offered? (explicit
-      key-escrow choice — see BRAINSTORM #6)
+      key-escrow choice — see BRAINSTORM #6) Leaning **no for now** — phrase
+      stays the only key; escrow can be added later as an explicit opt-in
+      without migration. Decide with C4.
 - [ ] Plus price point (R15–R30/month zone; decide after pilot data)
 
-### C1. Storage bucket + wire `HttpCloudBackupStore`  `[ ]`  (client contract complete; live bucket pending)
+### C1. Storage bucket + wire the cloud store  `[ ]`  (Supabase adapter complete; live project pending)
 
 The provider-neutral `CloudBackupStore` and HTTP PUT/GET adapter are split from
 encryption and covered by injected-fetch contract tests for URL encoding,
-headers, payloads, protocol errors, bad JSON, and offline failure. Manual
-encrypted upload/download remains behind `EXPO_PUBLIC_CLOUD_BACKUP_URL`.
+headers, payloads, protocol errors, bad JSON, and offline failure. Following
+the C0 decision, `SupabaseCloudBackupStore` (authenticated storage REST
+upsert/read, no SDK) and a `createConfiguredCloudBackupStore()` factory now
+feed every construction site: Supabase via `EXPO_PUBLIC_SUPABASE_URL` +
+`EXPO_PUBLIC_SUPABASE_ANON_KEY`, the neutral HTTP store via
+`EXPO_PUBLIC_CLOUD_BACKUP_URL` as fallback, off when unset. Header, upsert,
+precedence and fail-closed half-configuration contracts are tested.
 
-**External gate:** choose and provision the authenticated object store, its
-credentials/authorization contract, retention policy, and production URL.
+**External gate:** create the Supabase project, bucket, and policies —
+step-by-step in [SUPABASE-SETUP.md](SUPABASE-SETUP.md) — and set the two env
+variables locally and in EAS.
 
 ### C2. Auto-push encrypted backup from the shop phone  `[ ]`  (code complete; live service/Plus acceptance pending)
 
@@ -259,8 +273,10 @@ subscription lifecycle and real entitlement injection.
 - [ ] **Remote-viewing acceptance:** configure the real encrypted store and
       Plus entitlement, push from the single writer, then use **View only** on
       the owner's physical phone without changing either shop database
-- [ ] Decide Supabase/Firebase, recovery-key escrow, Plus price and billing/auth
-      providers; provision the cloud bucket and Google OAuth client
+- [ ] ~~Decide Supabase/Firebase~~ (Supabase, 2026-07-18) → provision the
+      project/bucket per [SUPABASE-SETUP.md](SUPABASE-SETUP.md); still open:
+      recovery-key escrow, Plus price, billing/auth providers, Google OAuth
+      client
 - [ ] Sentry DSN (`EXPO_PUBLIC_SENTRY_DSN`) to activate crash reporting
 - [ ] Native-speaker review of xh / st / af / sw / am / om string files
 - [ ] EAS builds + release train ([RELEASE-TRAIN.md](RELEASE-TRAIN.md))
@@ -289,3 +305,4 @@ subscription lifecycle and real entitlement injection.
 | 2026-07-18 | D2 code complete: honest high/low day, adjacent-month and YTD statistics with localized Sales Book UI |
 | 2026-07-18 | Owner lock now also protects Settings, recovery phrases and Home backup/restore controls; worker counting/stock/credit/cash-up flows remain available |
 | 2026-07-18 | Integer-cents review fixed boundary rounding noise; schema conversion remains evidence-gated, while catalog/sync/multi-shop remain backend/demand-gated |
+| 2026-07-18 | C0 provider decided: Supabase. SupabaseCloudBackupStore + configuration factory wired at both construction sites with contract tests; SUPABASE-SETUP.md documents provisioning, policies, env wiring, and the honest pilot security/cost posture |

@@ -19,7 +19,12 @@ import {
 } from '../core/db';
 import type { CloudBackupStore } from './cloudBackupStore';
 
-export { HttpCloudBackupStore, type CloudBackupStore } from './cloudBackupStore';
+export {
+  createConfiguredCloudBackupStore,
+  HttpCloudBackupStore,
+  SupabaseCloudBackupStore,
+  type CloudBackupStore,
+} from './cloudBackupStore';
 
 const RECOVERY_PHRASE_KEY = 'shoptrack_cloud_recovery_phrase_v1';
 

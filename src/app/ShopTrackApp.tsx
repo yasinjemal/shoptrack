@@ -124,7 +124,7 @@ import {
 import { SettingsScreen } from '../ui/settings/SettingsScreen';
 import { HealthReportScreen } from '../ui/reports/HealthReportScreen';
 import { captureInitialPartnerReferral } from './partnerAttribution';
-import { HttpCloudBackupStore } from '../net/cloudBackup';
+import { createConfiguredCloudBackupStore } from '../net/cloudBackup';
 import { renderBackupPreviewMessage } from '../ui/backupPreviewMessage';
 import {
   canUsePlusFeature,
@@ -132,10 +132,7 @@ import {
   type EntitlementState,
 } from '../core/entitlements';
 
-const automaticCloudBackupUrl = process.env.EXPO_PUBLIC_CLOUD_BACKUP_URL;
-const automaticCloudBackupStore = automaticCloudBackupUrl
-  ? new HttpCloudBackupStore(automaticCloudBackupUrl)
-  : null;
+const automaticCloudBackupStore = createConfiguredCloudBackupStore();
 
 // ============================================
 // DATABASE SETUP
